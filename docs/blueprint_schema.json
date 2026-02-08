@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devfest2026.local/schemas/blueprint.schema.json",
+  "title": "Song Blueprint",
+  "description": "Canonical blueprint payload shared by API, MCP tools, and worker jobs.",
+  "type": "object",
+  "required": [
+    "id",
+    "style",
+    "tempo_bpm",
+    "key",
+    "sections",
+    "lyrics",
+    "voice"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "style": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "tempo_bpm": {
+      "type": "integer",
+      "minimum": 40,
+      "maximum": 220
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[A-G](#|b)?m?$"
+    },
+    "time_signature": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]?/[1-9][0-9]?$",
+      "default": "4/4"
+    },
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/section"
+      }
+    },
+    "lyrics": {
+      "type": "string",
+      "minLength": 1
+    },
+    "voice": {
+      "$ref": "#/$defs/voice"
+    },
+    "metadata": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "section": {
+      "type": "object",
+      "required": [
+        "name",
+        "bars"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "energy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.5
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "voice": {
+      "type": "object",
+      "required": [
+        "voice_id"
+      ],
+      "properties": {
+        "voice_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_id": {
+          "type": "string",
+          "default": "eleven_multilingual_v2"
+        },
+        "stability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "similarity_boost": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "style_exaggeration": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "speaker_boost": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
