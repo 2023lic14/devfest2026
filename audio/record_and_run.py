@@ -10,5 +10,5 @@ audio = sd.rec(int(DURATION * FS), samplerate=FS, channels=1)
 sd.wait()
 write("live_input.wav", FS, audio)
 
-intent = run_intent_pipeline.run("live_input.wav")
-print(intent)
+intent_and_tone = run_intent_pipeline.run("live_input.wav")
+print(intent_and_tone)

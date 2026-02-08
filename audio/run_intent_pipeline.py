@@ -5,32 +5,34 @@ import json
 from tone_analysis import analyze_tone, interpret_tone
 
 def run(audio_path: str):
-    print(f"Processing audio: {audio_path}")
+    # print(f"Processing audio: {audio_path}")
 
     cleaned = clean_input_audio(audio_path)
-    print("✓ Audio cleaned")
+    # print("✓ Audio cleaned")
 
     tone = analyze_tone(cleaned)
 
     transcript = transcribe_audio(cleaned)
-    print("✓ Transcription complete")
-    print("Transcript:", transcript)
+    # print("✓ Transcription complete")
+    # print("Transcript:", transcript)
 
     intent = extract_intent(transcript)
-    print("✓ Intent extracted")
+    # print("✓ Intent extracted")
 
-    print("\nFinal intent:")
-    print(json.dumps(intent, indent=2))
+    # print("\nFinal intent:")
+    # print(json.dumps(intent, indent=2))
 
-    print("\nVocal tone:")
-    print(tone)
+    # print("\nVocal tone:")
+    # print(tone)
 
-    print("\nTone interpretation:")
-    print(interpret_tone(tone))
+    # print("\nTone interpretation:")
+    tone_interpretation = interpret_tone(tone)
+    # print(tone_interpretation)
 
     return {
         "semantic_intent": intent,
-        "vocal_tone": tone
+        "vocal_tone": tone,
+        "tone_interpretation": tone_interpretation
     }
 
 
