@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Cinzel, Inter, Roboto_Mono } from "next/font/google";
 import "./globals.css";
+import StartupSplash from "./StartupSplash";
 
 const cinzel = Cinzel({
   subsets: ["latin"],
@@ -33,7 +34,10 @@ export default function RootLayout({
       lang="en"
       className={`${cinzel.variable} ${inter.variable} ${robotoMono.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        <StartupSplash />
+        {children}
+      </body>
     </html>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import MultiTrackEditor from "../../components/MultiTrackEditor";
+import MultiTrackEditor from "./MultiTrackEditor";
 
 export default function EditorPage() {
   const params = useSearchParams();
