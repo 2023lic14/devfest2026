@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+
+mcp/music-tools/.env
+mcp/music-tools/.env.*
+
+mcp/music-tools/node_modules/
+mcp/music-tools/dist/
