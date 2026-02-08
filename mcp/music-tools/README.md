@@ -15,12 +15,11 @@ Transports:
 ## Setup
 
 ```bash
-cd /Users/claireli/devfest2026/mcp/music-tools
+cd mcp/music-tools
 npm install
-cp /Users/claireli/devfest2026/.env.example .env
 ```
 
-Set required values in `.env`:
+Create or update `mcp/music-tools/.env` with required values:
 - `ELEVENLABS_API_KEY`
 - `ELEVENLABS_DEFAULT_VOICE_ID` (recommended)
 

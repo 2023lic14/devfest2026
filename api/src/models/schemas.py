@@ -1,11 +1,17 @@
+"""Database models and API response schemas."""
 from __future__ import annotations
 
+import enum
 import json
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import Enum, String
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
 
+from src.services.db import Base
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 DEFAULT_BLUEPRINT_SCHEMA_PATH = ROOT_DIR / "docs" / "blueprint_schema.json"
@@ -21,7 +27,7 @@ class Section(BaseModel):
 
 
 class VoiceSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     voice_id: str = Field(min_length=1)
     model_id: str | None = "eleven_multilingual_v2"
@@ -48,3 +54,41 @@ class Blueprint(BaseModel):
 def load_blueprint_schema(schema_path: Path | None = None) -> dict[str, Any]:
     target = schema_path or DEFAULT_BLUEPRINT_SCHEMA_PATH
     return json.loads(target.read_text(encoding="utf-8"))
+
+
+class JobStatus(str, enum.Enum):
+    """Lifecycle states for a rendering job."""
+
+    pending = "PENDING"
+    analyzing = "ANALYZING"
+    rendering = "RENDERING"
+    mixing = "MIXING"
+    completed = "COMPLETED"
+
+
+class Job(Base):
+    """SQLAlchemy model for render jobs."""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), nullable=False, index=True)
+    original_audio_url: Mapped[str] = mapped_column(String, nullable=False)
+    blueprint_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    final_audio_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class CreateMomentResponse(BaseModel):
+    """Response for the create-moment endpoint."""
+
+    job_id: str
+
+
+class StatusResponse(BaseModel):
+    """Response for status polling."""
+
+    id: str
+    status: JobStatus
+    original_audio_url: str
+    blueprint_json: dict[str, Any] | None = None
+    final_audio_url: str | None = None

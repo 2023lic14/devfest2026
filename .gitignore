@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+
+aoi/.env*
+
+mcp/music-tools/.env
+mcp/music-tools/.env.*
+
+mcp/music-tools/node_modules/
+mcp/music-tools/dist/
+mcp/.env.example
