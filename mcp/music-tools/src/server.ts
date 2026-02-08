@@ -46,9 +46,23 @@ interface VoiceSettings {
   speaker_boost?: boolean;
 }
 
+interface BlueprintSection {
+  name?: string;
+  bars?: number;
+  energy?: number;
+  prompt?: string;
+}
+
 interface Blueprint extends JsonObject {
+  id?: string;
+  style?: string;
+  tempo_bpm?: number;
+  key?: string;
+  time_signature?: string;
+  metadata?: JsonObject;
   lyrics?: string;
   voice?: VoiceSettings;
+  sections?: BlueprintSection[];
 }
 
 const FILE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +149,76 @@ function pickNumber(
   return undefined;
 }
 
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function looksLikeJsonPayload(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  );
+}
+
+function parseJsonObject(value: string): JsonObject | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object") {
+      return parsed as JsonObject;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function extractPromptSuggestion(errorBody: string): string | undefined {
+  const parsed = parseJsonObject(errorBody);
+  const detail = parsed?.detail;
+  if (!detail || typeof detail !== "object") {
+    return undefined;
+  }
+  const data = (detail as JsonObject).data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const suggestion = (data as JsonObject).prompt_suggestion;
+  if (typeof suggestion !== "string") {
+    return undefined;
+  }
+  const trimmed = suggestion.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractErrorStatus(errorBody: string): string | undefined {
+  const parsed = parseJsonObject(errorBody);
+  const detail = parsed?.detail;
+  if (!detail || typeof detail !== "object") {
+    return undefined;
+  }
+  const status = (detail as JsonObject).status;
+  return typeof status === "string" ? status : undefined;
+}
+
+function sanitizeStyleDescriptor(style: string | undefined): string | undefined {
+  if (!style) {
+    return undefined;
+  }
+  const cleaned = style
+    .replace(/\binspired by\b[^.?!]*/gi, "")
+    .replace(/\bin the style of\b[^.?!]*/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim()
+    .replace(/^[,.;:\-\s]+|[,.;:\-\s]+$/g, "");
+
+  return cleaned || undefined;
+}
+
 function getHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value[0];
@@ -182,7 +266,7 @@ async function synthesizePreview(args: {
   similarity_boost?: number;
   style_exaggeration?: number;
   speaker_boost?: boolean;
-}) {
+}, outputPrefix = "preview") {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return toolError("Missing ELEVENLABS_API_KEY.");
@@ -235,7 +319,7 @@ async function synthesizePreview(args: {
   }
 
   const audio = new Uint8Array(await response.arrayBuffer());
-  const filename = `preview-${Date.now()}-${randomUUID().slice(0, 8)}.mp3`;
+  const filename = `${outputPrefix}-${Date.now()}-${randomUUID().slice(0, 8)}.mp3`;
   const outputPath = path.resolve(outputDir, filename);
   await writeFile(outputPath, audio);
 
@@ -251,8 +335,263 @@ async function synthesizePreview(args: {
       output_path: outputPath,
       bytes: audio.byteLength,
       mime_type: "audio/mpeg",
+      output_kind: outputPrefix,
       voice_id: voiceId,
       model_id: modelId
+    }
+  };
+}
+
+function buildMusicPromptFromBlueprint(
+  blueprint: Blueprint,
+  options?: {
+    forceInstrumental?: boolean;
+    prompt?: string;
+  }
+): string | undefined {
+  if (options?.prompt?.trim() && !looksLikeJsonPayload(options.prompt)) {
+    return options.prompt.trim();
+  }
+
+  const sections = Array.isArray(blueprint.sections) ? blueprint.sections : [];
+  const sectionSummary = sections
+    .map((section) => {
+      const name = section.name?.trim() || "section";
+      const bars = typeof section.bars === "number" ? `${section.bars} bars` : "bars unspecified";
+      const energy =
+        typeof section.energy === "number" ? `energy ${section.energy.toFixed(2)}` : "energy flexible";
+      return `${name} (${bars}, ${energy})`;
+    })
+    .join(", ");
+
+  const mood =
+    blueprint.metadata && typeof blueprint.metadata.mood === "string"
+      ? blueprint.metadata.mood
+      : undefined;
+
+  const lines = [
+    "Compose a complete, studio-quality song with instrumentation and sung vocals.",
+    blueprint.style ? `Style/genre: ${blueprint.style}.` : undefined,
+    blueprint.tempo_bpm ? `Tempo: ${blueprint.tempo_bpm} BPM.` : undefined,
+    blueprint.key ? `Key center: ${blueprint.key}.` : undefined,
+    blueprint.time_signature ? `Time signature: ${blueprint.time_signature}.` : undefined,
+    mood ? `Mood: ${mood}.` : undefined,
+    sectionSummary ? `Song sections: ${sectionSummary}.` : undefined,
+    options?.forceInstrumental ? "Make this fully instrumental (no vocals)." : "Include clear lead vocals.",
+    blueprint.lyrics ? "Use the following lyrics as the vocal topline and keep wording close:" : undefined,
+    blueprint.lyrics?.trim()
+  ].filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return lines.join("\n\n");
+}
+
+function buildPolicySafePromptFromBlueprint(
+  blueprint: Blueprint,
+  options?: {
+    forceInstrumental?: boolean;
+  }
+): string | undefined {
+  const sections = Array.isArray(blueprint.sections) ? blueprint.sections : [];
+  const sectionSummary = sections
+    .map((section) => {
+      const name = section.name?.trim() || "section";
+      const bars = typeof section.bars === "number" ? `${section.bars} bars` : "bars unspecified";
+      const energy =
+        typeof section.energy === "number" ? `energy ${section.energy.toFixed(2)}` : "energy flexible";
+      return `${name} (${bars}, ${energy})`;
+    })
+    .join(", ");
+
+  const mood =
+    blueprint.metadata && typeof blueprint.metadata.mood === "string"
+      ? blueprint.metadata.mood
+      : undefined;
+
+  const sanitizedStyle =
+    sanitizeStyleDescriptor(blueprint.style) ??
+    "catchy pop-folk with introspective, poetic storytelling";
+
+  const lines = [
+    "Compose a complete, studio-quality song with instrumentation and sung vocals.",
+    `Style/genre: ${sanitizedStyle}.`,
+    blueprint.tempo_bpm ? `Tempo: ${blueprint.tempo_bpm} BPM.` : undefined,
+    blueprint.key ? `Key center: ${blueprint.key}.` : undefined,
+    blueprint.time_signature ? `Time signature: ${blueprint.time_signature}.` : undefined,
+    mood ? `Mood: ${mood}.` : undefined,
+    sectionSummary ? `Song sections: ${sectionSummary}.` : undefined,
+    "Keep it original and avoid imitating or referencing any specific named artist.",
+    options?.forceInstrumental ? "Make this fully instrumental (no vocals)." : "Include clear lead vocals.",
+    blueprint.lyrics ? "Use the following lyrics as the vocal topline and keep wording close:" : undefined,
+    blueprint.lyrics?.trim()
+  ].filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return lines.join("\n\n");
+}
+
+function estimateMusicLengthMs(blueprint: Blueprint, requestedLengthMs?: number): number {
+  if (typeof requestedLengthMs === "number") {
+    return clampInteger(requestedLengthMs, 10000, 300000);
+  }
+
+  const bpm = typeof blueprint.tempo_bpm === "number" ? blueprint.tempo_bpm : 100;
+  const [numeratorRaw] = (blueprint.time_signature ?? "4/4").split("/");
+  const beatsPerBar = Number(numeratorRaw) || 4;
+  const totalBars = (Array.isArray(blueprint.sections) ? blueprint.sections : []).reduce((acc, section) => {
+    return acc + (typeof section.bars === "number" ? section.bars : 0);
+  }, 0);
+  const fallbackBars = totalBars > 0 ? totalBars : 32;
+  const beatMs = 60000 / bpm;
+  const estimated = fallbackBars * beatsPerBar * beatMs;
+
+  return clampInteger(estimated, 10000, 300000);
+}
+
+function outputFormatToExtension(outputFormat: string): string {
+  const prefix = outputFormat.split("_")[0]?.toLowerCase();
+  if (!prefix) {
+    return "mp3";
+  }
+  if (prefix === "mp3") {
+    return "mp3";
+  }
+  if (prefix === "pcm") {
+    return "pcm";
+  }
+  if (prefix === "ulaw" || prefix === "mulaw") {
+    return "ulaw";
+  }
+  return prefix;
+}
+
+function outputFormatToMimeType(outputFormat: string): string {
+  const prefix = outputFormat.split("_")[0]?.toLowerCase();
+  if (prefix === "mp3") {
+    return "audio/mpeg";
+  }
+  return "application/octet-stream";
+}
+
+async function composeSongWithElevenMusic(args: {
+  blueprint: Blueprint;
+  prompt?: string;
+  model_id?: string;
+  music_length_ms?: number;
+  force_instrumental?: boolean;
+  output_format?: string;
+}) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    return toolError("Missing ELEVENLABS_API_KEY.");
+  }
+
+  const outputDir = process.env.ELEVENLABS_OUTPUT_DIR || DEFAULT_OUTPUT_DIR;
+  await mkdir(outputDir, { recursive: true });
+
+  const outputFormat = args.output_format ?? process.env.ELEVENLABS_MUSIC_OUTPUT_FORMAT ?? "mp3_44100_128";
+  const defaultMusicModelId = process.env.ELEVENLABS_MUSIC_MODEL_ID ?? "music_v1";
+  const requestedModelId = args.model_id?.trim();
+  const modelId =
+    requestedModelId && requestedModelId.toLowerCase().startsWith("music")
+      ? requestedModelId
+      : defaultMusicModelId;
+  const forceInstrumental = args.force_instrumental ?? false;
+  const musicLengthMs = estimateMusicLengthMs(args.blueprint, args.music_length_ms);
+
+  const prompt = buildMusicPromptFromBlueprint(args.blueprint, {
+    forceInstrumental,
+    prompt: args.prompt
+  });
+  if (!prompt) {
+    return toolError("Missing song prompt. Provide `prompt` or blueprint fields (style/lyrics/sections).");
+  }
+
+  const params = new URLSearchParams({ output_format: outputFormat });
+  const requestSong = async (promptText: string) => {
+    return fetch(`https://api.elevenlabs.io/v1/music?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: promptText,
+        model_id: modelId,
+        music_length_ms: musicLengthMs,
+        force_instrumental: forceInstrumental
+      })
+    });
+  };
+
+  let promptUsed = prompt;
+  let moderationFallbackApplied = false;
+  let response = await requestSong(promptUsed);
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    const errorStatus = extractErrorStatus(errorBody);
+    const isBadPrompt = response.status === 400 && errorStatus === "bad_prompt";
+    const suggestedPrompt = extractPromptSuggestion(errorBody);
+    const safeFallbackPrompt = buildPolicySafePromptFromBlueprint(args.blueprint, {
+      forceInstrumental
+    });
+    const retryPrompt = suggestedPrompt ?? safeFallbackPrompt;
+
+    if (isBadPrompt && retryPrompt && retryPrompt !== promptUsed) {
+      promptUsed = retryPrompt;
+      moderationFallbackApplied = true;
+      response = await requestSong(promptUsed);
+      if (!response.ok) {
+        const retryErrorBody = await response.text();
+        return toolError("ElevenLabs music composition failed.", {
+          status: response.status,
+          response_body: retryErrorBody,
+          moderation_fallback_applied: moderationFallbackApplied,
+          original_prompt_rejected: true
+        });
+      }
+    } else {
+      return toolError("ElevenLabs music composition failed.", {
+        status: response.status,
+        response_body: errorBody,
+        prompt_suggestion: suggestedPrompt,
+        original_prompt_rejected: isBadPrompt
+      });
+    }
+  }
+
+  const audio = new Uint8Array(await response.arrayBuffer());
+  const extension = outputFormatToExtension(outputFormat);
+  const filename = `song-${Date.now()}-${randomUUID().slice(0, 8)}.${extension}`;
+  const outputPath = path.resolve(outputDir, filename);
+  await writeFile(outputPath, audio);
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Song composed successfully: ${outputPath}`
+      }
+    ],
+    structuredContent: {
+      ok: true,
+      output_path: outputPath,
+      bytes: audio.byteLength,
+      mime_type: outputFormatToMimeType(outputFormat),
+      output_kind: "song",
+      model_id: modelId,
+      output_format: outputFormat,
+      music_length_ms: musicLengthMs,
+      force_instrumental: forceInstrumental,
+      moderation_fallback_applied: moderationFallbackApplied,
+      prompt_used: promptUsed
     }
   };
 }
@@ -321,6 +660,37 @@ function createMusicToolsServer(input: {
       return synthesizePreview({
         ...args,
         blueprint
+      });
+    }
+  );
+
+  server.tool(
+    "create_song",
+    "Create a full song with ElevenLabs Music (instrumental + optional vocals) from a blueprint.",
+    {
+      blueprint: z.record(z.unknown()),
+      prompt: z.string().min(1).optional(),
+      model_id: z.string().min(1).optional(),
+      music_length_ms: z.number().int().min(10000).max(300000).optional(),
+      force_instrumental: z.boolean().optional(),
+      output_format: z.string().min(1).optional()
+    },
+    async (args) => {
+      const blueprint = args.blueprint as Blueprint;
+      const blueprintIsValid = input.validateBlueprint(blueprint);
+      if (!blueprintIsValid) {
+        return toolError("Blueprint validation failed before song creation.", {
+          errors: formatAjvErrors(input.validateBlueprint.errors)
+        });
+      }
+
+      return composeSongWithElevenMusic({
+        blueprint,
+        prompt: args.prompt,
+        model_id: args.model_id,
+        music_length_ms: args.music_length_ms,
+        force_instrumental: args.force_instrumental,
+        output_format: args.output_format
       });
     }
   );

@@ -5,6 +5,7 @@ Minimal MCP server for Person D scope.
 Tools:
 - `validate_blueprint`: validates against `docs/blueprint_schema.json`
 - `synthesize_preview`: calls ElevenLabs text-to-speech and saves preview audio
+- `create_song`: calls ElevenLabs Music (`POST /v1/music`) to generate an instrumental+vocal song from blueprint/style/lyrics
 
 Transports:
 - `stdio` (default, local MCP clients)
@@ -65,6 +66,7 @@ Authorization: Bearer <MCP_AUTH_TOKEN>
 5. Test tools:
 - `validate_blueprint`
 - `synthesize_preview`
+- `create_song`
 
 ## Public URL quick option (development)
 
@@ -84,6 +86,7 @@ Then use `https://<ngrok-host>/mcp` in ElevenLabs.
 - `MCP_ENABLE_JSON_RESPONSE=true|false` (default `false`)
 - `MCP_HTTP_STATELESS=true|false` (default `false`, keep `false` recommended)
 - `MCP_ENABLE_LEGACY_SSE=true|false` (default `false`)
+- `MCP_CREATE_SONG_TIMEOUT_MS` default `300000` (gpt-agent tool timeout for long music generation)
 
 ## GPT bridge
 
@@ -95,7 +98,7 @@ Requirements:
 * `MCP_TUNNEL_URL` – the public URL for your tunnel (for example `https://sao-head-moore-albums.trycloudflare.com/mcp`).
 * Optional: `OPENAI_MODEL` (defaults to `gpt-4o-mini`) and any `gpt-agent` arguments.
 
-Usage:
+Usage (preview):
 
 ```bash
 OPENAI_API_KEY=sk_... MCP_TUNNEL_URL=https://.../mcp npm run gpt-agent -- "Validate my blueprint and synthesize a preview."
@@ -103,9 +106,15 @@ OPENAI_API_KEY=sk_... MCP_TUNNEL_URL=https://.../mcp npm run gpt-agent -- "Valid
 
 The script prints the MCP tool name and arguments chosen by GPT along with the tool outputs. Use it to iterate on prompts and verify `validate_blueprint` and `synthesize_preview` before wiring more advanced agents.
 
+Usage (full song via ElevenLabs Music):
+
+```bash
+OPENAI_API_KEY=sk_... MCP_TUNNEL_URL=https://.../mcp npm run gpt-agent -- "Create a song with vocals and instrumental from this blueprint."
+```
+
 ### Blueprint configuration
 
-By default the bridge uses a fixed blueprint (id `demo-blueprint`, style `dreamy pop`) so GPT always has valid data. To inject your own blueprint, point `MCP_BLUEPRINT_JSON` at a JSON string or use the CLI to feed in a blueprint payload:
+By default the bridge uses a fully fleshed-out blueprint (`demo-blueprint`, catchy pop-folk with poetic storytelling influences, time signature 4/4, multiple sections, and voice metadata) so GPT always has valid data. To inject your own blueprint, point `MCP_BLUEPRINT_JSON` at a JSON string or use the CLI to feed in a blueprint payload:
 
 ```bash
 OPENAI_API_KEY=sk_... \
@@ -115,3 +124,7 @@ npm run gpt-agent -- "Validate this blueprint and synthesize a preview."
 ```
 
 The default blueprint is used whenever `MCP_BLUEPRINT_JSON` is missing, so simple prompts still work.
+
+### Audio preview storage
+
+When GPT triggers `synthesize_preview`, the MCP server writes an MP3 file under `ELEVENLABS_OUTPUT_DIR` (default `tmp/audio-previews`). The GPT bridge now copies that file to a persistent location under `tmp/audio-previews/<timestamp>-preview.mp3` and logs the path. Check that path to listen to the generated audio or upload it to shared storage for others. Keep the storage directory mounted if you want team access to the previews.
