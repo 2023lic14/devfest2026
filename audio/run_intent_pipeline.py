@@ -2,13 +2,15 @@ from audio_io import clean_input_audio
 from intent_extraction import transcribe_audio, extract_intent
 import sys
 import json
-
+from tone_analysis import analyze_tone, interpret_tone
 
 def run(audio_path: str):
     print(f"Processing audio: {audio_path}")
 
     cleaned = clean_input_audio(audio_path)
     print("✓ Audio cleaned")
+
+    tone = analyze_tone(cleaned)
 
     transcript = transcribe_audio(cleaned)
     print("✓ Transcription complete")
@@ -20,7 +22,17 @@ def run(audio_path: str):
     print("\nFinal intent:")
     print(json.dumps(intent, indent=2))
 
-    return intent
+    print("\nVocal tone:")
+    print(tone)
+
+    print("\nTone interpretation:")
+    print(interpret_tone(tone))
+
+    return {
+        "semantic_intent": intent,
+        "vocal_tone": tone
+    }
+
 
 
 if __name__ == "__main__":
