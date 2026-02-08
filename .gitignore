@@ -1,19 +1,8 @@
-.env
-.env.*
-!.env.example
-
-aoi/.env*
-
-mcp/music-tools/.env
-mcp/music-tools/.env.*
-
-mcp/music-tools/node_modules/
-mcp/music-tools/dist/
-mcp/.env.example
+.DS_Store
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
@@ -21,6 +10,12 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+
+# Env
+.env
+.env.*
+!.env.example
+api/.env*
 
 # Next.js / web
 web/node_modules/
@@ -36,6 +31,18 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Local scratch/output
+tmp/
+mcp/tmp/
 tmp_audio/
 audio-previews/
 celery.log
+api/celery.log
+
+# MCP dev outputs
+mcp/music-tools/.env
+mcp/music-tools/.env.*
+mcp/music-tools/node_modules/
+mcp/music-tools/dist/
+mcp/.env.example

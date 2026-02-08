@@ -6,6 +6,7 @@ Tools:
 - `validate_blueprint`: validates against `docs/blueprint_schema.json`
 - `synthesize_preview`: calls ElevenLabs text-to-speech and saves preview audio
 - `create_song`: calls ElevenLabs Music (`POST /v1/music`) to generate an instrumental+vocal song from blueprint/style/lyrics
+- `create_moment`: calls the FastAPI `/v1/create-moment` endpoint (multipart upload) and polls `/v1/status/{job_id}` until completion
 
 Transports:
 - `stdio` (default, local MCP clients)
@@ -86,6 +87,7 @@ Then use `https://<ngrok-host>/mcp` in ElevenLabs.
 - `MCP_HTTP_STATELESS=true|false` (default `false`, keep `false` recommended)
 - `MCP_ENABLE_LEGACY_SSE=true|false` (default `false`)
 - `MCP_CREATE_SONG_TIMEOUT_MS` default `300000` (gpt-agent tool timeout for long music generation)
+- `MOMENT_API_BASE_URL` default `http://127.0.0.1:8000` (used by `create_moment`)
 
 ## GPT bridge
 
@@ -127,3 +129,12 @@ The default blueprint is used whenever `MCP_BLUEPRINT_JSON` is missing, so simpl
 ### Audio preview storage
 
 When GPT triggers `synthesize_preview`, the MCP server writes an MP3 file under `ELEVENLABS_OUTPUT_DIR` (default `tmp/audio-previews`). The GPT bridge now copies that file to a persistent location under `tmp/audio-previews/<timestamp>-preview.mp3` and logs the path. Check that path to listen to the generated audio or upload it to shared storage for others. Keep the storage directory mounted if you want team access to the previews.
+
+## Audio -> Blueprint -> API
+
+If you want to turn an audio file into a schema-valid blueprint and submit it to the backend pipeline:
+
+```bash
+cd mcp/music-tools
+npm run audio:moment -- ../../audio/devfest-test-1.m4a --api http://127.0.0.1:8000 --kind song
+```

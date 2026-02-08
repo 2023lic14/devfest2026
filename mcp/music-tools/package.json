@@ -6,11 +6,13 @@
   "description": "MCP server for blueprint validation and ElevenLabs preview synthesis.",
   "scripts": {
     "dev": "tsx src/server.ts",
-    "dev:http": "tsx src/server.ts",
+    "dev:http": "MCP_TRANSPORT=http tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "start:http": "node dist/server.js",
-    "gpt-agent": "tsx gpt-agent.ts"
+    "start:http": "MCP_TRANSPORT=http node dist/server.js",
+    "gpt-agent": "tsx gpt-agent.ts",
+    "audio:blueprint": "tsx audio-to-blueprint.ts",
+    "audio:moment": "tsx audio-to-moment.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",

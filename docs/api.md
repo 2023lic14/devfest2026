@@ -97,6 +97,8 @@ Creates a new Job and starts the Celery chain.
 
 - Content-Type: multipart/form-data
 - Field: file (audio upload)
+- Optional Field: blueprint_json (stringified JSON matching docs/blueprint_schema.json)
+- Optional Field: output_kind (preview|song). Stored in blueprint metadata and used by the worker to choose MCP `synthesize_preview` vs `create_song`.
 
 Response:
 

@@ -134,6 +134,29 @@ class MCPDirector:
 		"""Validate a blueprint payload using MCP."""
 		return self.call_tool("validate_blueprint", {"blueprint": blueprint})
 
+	def create_song(
+		self,
+		blueprint: Dict[str, Any],
+		prompt: str | None = None,
+		model_id: str | None = None,
+		music_length_ms: int | None = None,
+		force_instrumental: bool | None = None,
+		output_format: str | None = None,
+	) -> Dict[str, Any]:
+		"""Generate a full song via the MCP create_song tool (ElevenLabs Music)."""
+		arguments: Dict[str, Any] = {"blueprint": blueprint}
+		if prompt is not None:
+			arguments["prompt"] = prompt
+		if model_id is not None:
+			arguments["model_id"] = model_id
+		if music_length_ms is not None:
+			arguments["music_length_ms"] = music_length_ms
+		if force_instrumental is not None:
+			arguments["force_instrumental"] = force_instrumental
+		if output_format is not None:
+			arguments["output_format"] = output_format
+		return self.call_tool("create_song", arguments)
+
 	def synthesize_preview(
 		self,
 		text: str | None = None,

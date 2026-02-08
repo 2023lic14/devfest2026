@@ -163,6 +163,23 @@ const functions: FunctionDef[] = [
       },
       required: ["blueprint"]
     }
+  },
+  {
+    name: "create_moment",
+    description: "Uploads an audio file to the FastAPI /v1/create-moment pipeline and polls /v1/status/{job_id} until completion.",
+    parameters: {
+      type: "object",
+      properties: {
+        audio_url: { type: "string", description: "Public or presigned URL to the audio file." },
+        audio_path: { type: "string", description: "Local path to an audio file on the MCP server filesystem." },
+        filename: { type: "string", description: "Optional filename override for uploads." },
+        blueprint_json: { type: "string", description: "Optional blueprint JSON string to attach to the job." },
+        output_kind: { type: "string", description: "Optional override: preview|song (stored in blueprint metadata on the API side)." },
+        api_base_url: { type: "string", description: "API base URL (default from MOMENT_API_BASE_URL or http://127.0.0.1:8000)." },
+        poll_interval_ms: { type: "number", description: "Polling interval in ms (250-10000)." },
+        timeout_ms: { type: "number", description: "Overall timeout in ms (5000-1200000)." }
+      }
+    }
   }
 ];
 
@@ -410,13 +427,13 @@ async function run() {
       blueprint
     );
 
-    const followUpMessages = [
+    const followUpMessages: any[] = [
       { role: "system", content: systemInstruction },
       { role: "user", content: `${prompt}\n\nBlueprint:\n${blueprintSummary}` },
       toolMessage
     ];
 
-    if (functionName === "validate_blueprint" && toolMessage.structuredContent?.ok) {
+    if (functionName === "validate_blueprint" && (toolMessage.structuredContent as any)?.ok) {
       const nextTool = promptRequestsSong ? "create_song" : "synthesize_preview";
       const nextToolArgs = promptRequestsSong
         ? mapArgsToCreateSong({}, blueprint)
@@ -432,7 +449,7 @@ async function run() {
 
     const followUp = await openai.chat.completions.create({
       model,
-      messages: followUpMessages
+      messages: followUpMessages as any
     });
 
     console.log("LLM final response:");

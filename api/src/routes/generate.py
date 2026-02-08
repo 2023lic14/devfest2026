@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import os
 import uuid
-
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from sqlalchemy.orm import Session
 
 from src.config import settings
-from src.models.schemas import CreateMomentResponse, Job, JobStatus
+from src.models.schemas import Blueprint, CreateMomentResponse, Job, JobStatus
 from src.services.db import get_db
 from celery import chain, chord, group
 
@@ -27,7 +26,12 @@ router = APIRouter(prefix="/v1", tags=["moments"])
 
 
 @router.post("/create-moment", response_model=CreateMomentResponse)
-async def create_moment(file: UploadFile = File(...), db: Session = Depends(get_db)) -> CreateMomentResponse:
+async def create_moment(
+	file: UploadFile = File(...),
+	blueprint_json: str | None = Form(default=None),
+	output_kind: str | None = Form(default=None),
+	db: Session = Depends(get_db),
+) -> CreateMomentResponse:
 	"""Accept an upload, persist a Job, and trigger the Celery pipeline."""
 	job_id = str(uuid.uuid4())
 
@@ -38,11 +42,23 @@ async def create_moment(file: UploadFile = File(...), db: Session = Depends(get_
 	object_name = f"moments/{job_id}/original/{file.filename}"
 	original_audio_url = upload_to_spaces(temp_path, object_name)
 
+	parsed_blueprint: dict | None = None
+	if blueprint_json:
+		try:
+			parsed_blueprint = Blueprint.model_validate_json(blueprint_json).model_dump()
+		except Exception as exc:
+			raise HTTPException(status_code=400, detail=f"Invalid blueprint_json: {exc}") from exc
+
+		# Allow the caller to force output kind without having to mutate the blueprint on their side.
+		if output_kind:
+			metadata = parsed_blueprint.setdefault("metadata", {})
+			metadata["output_kind"] = output_kind
+
 	job = Job(
 		id=job_id,
 		status=JobStatus.pending,
 		original_audio_url=original_audio_url,
-		blueprint_json=None,
+		blueprint_json=parsed_blueprint,
 		final_audio_url=None,
 	)
 	db.add(job)

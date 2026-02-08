@@ -14,7 +14,6 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { ErrorObject, ValidateFunction } from "ajv";
 import dotenv from "dotenv";
 import { z } from "zod";
-import draft2020Schema from "ajv/dist/refs/json-schema-draft-2020-12.json" assert { type: "json" };
 
 dotenv.config();
 
@@ -70,6 +69,10 @@ const DEFAULT_OUTPUT_DIR = path.resolve(process.cwd(), "tmp/audio-previews");
 const DEFAULT_MODEL_ID = process.env.ELEVENLABS_MODEL_ID ?? "eleven_multilingual_v2";
 const LEGACY_SSE_PATH = "/sse";
 const LEGACY_SSE_MESSAGES_PATH = "/messages";
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function parseBool(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined) {
@@ -134,6 +137,98 @@ function toolError(message: string, details?: JsonObject) {
       ...(details ?? {})
     }
   };
+}
+
+async function createMomentViaApi(args: {
+  audio_url?: string;
+  audio_path?: string;
+  filename?: string;
+  blueprint_json?: string;
+  output_kind?: string;
+  api_base_url?: string;
+  poll_interval_ms?: number;
+  timeout_ms?: number;
+}) {
+  const apiBaseUrl =
+    (args.api_base_url ?? process.env.MOMENT_API_BASE_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
+  const pollIntervalMs = Math.max(250, Math.min(10000, Math.floor(args.poll_interval_ms ?? 1500)));
+  const timeoutMs = Math.max(5000, Math.min(20 * 60_000, Math.floor(args.timeout_ms ?? 180_000)));
+
+  let audioBuffer: Buffer;
+  let contentType = "application/octet-stream";
+  let filename = (args.filename ?? "").trim();
+
+  if (args.audio_url) {
+    const response = await fetch(args.audio_url);
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Unable to download audio_url (status ${response.status}): ${body}`.trim());
+    }
+    contentType = response.headers.get("content-type") ?? contentType;
+    const urlName = (() => {
+      try {
+        const url = new URL(args.audio_url);
+        const basename = path.posix.basename(url.pathname);
+        return basename && basename !== "/" ? basename : "";
+      } catch {
+        return "";
+      }
+    })();
+    filename = filename || urlName || `moment-${Date.now()}.bin`;
+    audioBuffer = Buffer.from(await response.arrayBuffer());
+  } else if (args.audio_path) {
+    audioBuffer = await readFile(args.audio_path);
+    filename = filename || path.basename(args.audio_path);
+  } else {
+    throw new Error("Provide audio_url or audio_path.");
+  }
+
+  // Node's fetch supports FormData; we avoid extra deps.
+  const form = new FormData();
+  const arrayBuffer = audioBuffer.buffer.slice(
+    audioBuffer.byteOffset,
+    audioBuffer.byteOffset + audioBuffer.byteLength
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer], { type: contentType });
+  form.set("file", blob, filename);
+  if (typeof args.blueprint_json === "string" && args.blueprint_json.trim().length > 0) {
+    form.set("blueprint_json", args.blueprint_json.trim());
+  }
+  if (typeof args.output_kind === "string" && args.output_kind.trim().length > 0) {
+    form.set("output_kind", args.output_kind.trim());
+  }
+
+  const createResponse = await fetch(`${apiBaseUrl}/v1/create-moment`, {
+    method: "POST",
+    body: form
+  });
+  if (!createResponse.ok) {
+    const body = await createResponse.text().catch(() => "");
+    throw new Error(`API create-moment failed (status ${createResponse.status}): ${body}`.trim());
+  }
+
+  const created = (await createResponse.json()) as { job_id?: string };
+  const jobId = created.job_id;
+  if (!jobId) {
+    throw new Error("API create-moment response missing job_id.");
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const statusResp = await fetch(`${apiBaseUrl}/v1/status/${jobId}`);
+    if (!statusResp.ok) {
+      const body = await statusResp.text().catch(() => "");
+      throw new Error(`API status failed (status ${statusResp.status}): ${body}`.trim());
+    }
+    const statusJson = (await statusResp.json()) as Record<string, unknown>;
+    const status = String(statusJson["status"] ?? "");
+    if (status === "COMPLETED") {
+      return { job_id: jobId, status_json: statusJson };
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  return { job_id: jobId, timeout: true };
 }
 
 function pickNumber(
@@ -692,6 +787,65 @@ function createMusicToolsServer(input: {
         force_instrumental: args.force_instrumental,
         output_format: args.output_format
       });
+    }
+  );
+
+  server.tool(
+    "create_moment",
+    "Upload an audio file to the API /v1/create-moment pipeline and poll until completion.",
+    {
+      audio_url: z.string().min(1).optional(),
+      audio_path: z.string().min(1).optional(),
+      filename: z.string().min(1).optional(),
+      blueprint_json: z.string().min(1).optional(),
+      output_kind: z.string().min(1).optional(),
+      api_base_url: z.string().min(1).optional(),
+      poll_interval_ms: z.number().int().min(250).max(10000).optional(),
+      timeout_ms: z.number().int().min(5000).max(20 * 60_000).optional()
+    },
+    async (args) => {
+      try {
+        const result = await createMomentViaApi({
+          audio_url: args.audio_url,
+          audio_path: args.audio_path,
+          filename: args.filename,
+          blueprint_json: args.blueprint_json,
+          output_kind: args.output_kind,
+          api_base_url: args.api_base_url,
+          poll_interval_ms: args.poll_interval_ms,
+          timeout_ms: args.timeout_ms
+        });
+
+        if ((result as any).timeout) {
+          return toolError("Timed out waiting for the moment pipeline to complete.", {
+            job_id: (result as any).job_id
+          });
+        }
+
+        const statusJson = (result as any).status_json as Record<string, unknown> | undefined;
+        const finalAudioUrl = statusJson ? statusJson["final_audio_url"] : undefined;
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: typeof finalAudioUrl === "string" && finalAudioUrl
+                ? `Moment completed. final_audio_url: ${finalAudioUrl}`
+                : "Moment completed."
+            }
+          ],
+          structuredContent: {
+            ok: true,
+            job_id: (result as any).job_id,
+            status: statusJson?.["status"],
+            final_audio_url: finalAudioUrl,
+            status_json: statusJson
+          }
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return toolError("Moment pipeline request failed.", { error: message });
+      }
     }
   );
 

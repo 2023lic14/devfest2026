@@ -106,7 +106,7 @@ def generate_blueprint(job_id: str) -> Dict[str, Any]:
 		if not job:
 			return {"job_id": job_id, "blueprint": {}}
 
-		blueprint = _default_blueprint(job_id, job.original_audio_url)
+		blueprint = job.blueprint_json or _default_blueprint(job_id, job.original_audio_url)
 		director = MCPDirector()
 		validation = director.validate_blueprint(blueprint)
 		if isinstance(validation, dict):
@@ -172,15 +172,32 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 			raise RuntimeError("Missing blueprint data for MCP synthesis.")
 		blueprint = job.blueprint_json
 
+	metadata = blueprint.get("metadata", {}) if isinstance(blueprint, dict) else {}
+	output_kind = (metadata.get("output_kind") or settings.mcp_output_kind or "preview").lower()
+
 	voice = blueprint.get("voice", {}) if isinstance(blueprint, dict) else {}
 	voice_id = voice.get("voice_id") or settings.default_voice_id
-	if not voice_id:
-		raise RuntimeError("Missing voice_id for ElevenLabs synthesis. Set ELEVENLABS_DEFAULT_VOICE_ID.")
 	lyrics = blueprint.get("lyrics") if isinstance(blueprint, dict) else None
 	model_id = voice.get("model_id") if isinstance(voice, dict) else None
 
-	director = MCPDirector()
-	synthesis = director.synthesize_preview(text=lyrics, voice_id=voice_id, model_id=model_id)
+	# create_song can take minutes; use a longer timeout for that call.
+	timeout = settings.mcp_song_timeout_seconds if output_kind == "song" else settings.mcp_timeout_seconds
+	director = MCPDirector(timeout_seconds=timeout)
+
+	if output_kind == "song":
+		synthesis = director.create_song(
+			blueprint=blueprint,
+			prompt=settings.mcp_song_prompt,
+			model_id=settings.mcp_song_model_id,
+			music_length_ms=settings.mcp_song_length_ms,
+			force_instrumental=settings.mcp_song_force_instrumental,
+			output_format=settings.mcp_song_output_format,
+		)
+	else:
+		if not voice_id:
+			raise RuntimeError("Missing voice_id for ElevenLabs synthesis. Set ELEVENLABS_DEFAULT_VOICE_ID.")
+		synthesis = director.synthesize_preview(text=lyrics, voice_id=voice_id, model_id=model_id)
+
 	structured = synthesis.get("structuredContent", {}) if isinstance(synthesis, dict) else {}
 	if not structured.get("ok"):
 		raise RuntimeError(f"MCP synthesis failed: {structured}")

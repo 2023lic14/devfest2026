@@ -41,6 +41,17 @@ class Settings(BaseSettings):
 	mcp_auth_token: str | None = Field(default=None, alias="MCP_AUTH_TOKEN")
 	mcp_http_stateless: bool = Field(default=False, alias="MCP_HTTP_STATELESS")
 	default_voice_id: str = Field(default="", alias="ELEVENLABS_DEFAULT_VOICE_ID")
+	# Controls whether the backend asks MCP to synthesize a TTS preview or a full song.
+	# Values: "preview" (default) or "song".
+	mcp_output_kind: str = Field(default="preview", alias="MCP_OUTPUT_KIND")
+
+	# Optional knobs for MCP create_song (ElevenLabs Music) when output_kind == "song".
+	mcp_song_timeout_seconds: float = Field(default=300.0, alias="MCP_SONG_TIMEOUT_SECONDS")
+	mcp_song_model_id: str | None = Field(default=None, alias="MCP_SONG_MODEL_ID")
+	mcp_song_prompt: str | None = Field(default=None, alias="MCP_SONG_PROMPT")
+	mcp_song_length_ms: int = Field(default=180000, alias="MCP_SONG_LENGTH_MS")
+	mcp_song_force_instrumental: bool = Field(default=False, alias="MCP_SONG_FORCE_INSTRUMENTAL")
+	mcp_song_output_format: str = Field(default="mp3_44100_128", alias="MCP_SONG_OUTPUT_FORMAT")
 
 	temp_dir: str = "/tmp"
 
