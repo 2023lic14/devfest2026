@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Routes for polling job status."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from urllib.parse import urlsplit
 
@@ -43,15 +43,43 @@ def get_status(job_id: str, db: Session = Depends(get_db)) -> StatusResponse:
 
 
 @router.get("/proxy-audio")
-def proxy_audio(url: str = Query(..., min_length=1)) -> Response:
-	"""Proxy audio files to avoid browser CORS issues."""
+def proxy_audio(request: Request, url: str = Query(..., min_length=1)) -> Response:
+	"""Proxy audio files to avoid browser CORS issues.
+
+	Uses streaming so large stem files (wav) can load without buffering the entire file in memory.
+	Also forwards Range requests to support efficient waveform loading.
+	"""
 	if not _is_allowed_proxy_url(url):
 		raise HTTPException(status_code=400, detail="URL is not allowed for proxying.")
+
+	upstream_headers: dict[str, str] = {}
+	range_header = request.headers.get("range")
+	if range_header:
+		upstream_headers["range"] = range_header
+
 	try:
-		response = httpx.get(url, timeout=60.0)
+		# Enter the stream context manually so we can return an iterator without buffering.
+		stream = httpx.stream("GET", url, headers=upstream_headers, timeout=httpx.Timeout(60.0, read=None))
+		response = stream.__enter__()
 		response.raise_for_status()
 	except httpx.HTTPError as exc:
+		try:
+			stream.__exit__(type(exc), exc, exc.__traceback__)  # type: ignore[name-defined]
+		except Exception:
+			pass
 		raise HTTPException(status_code=502, detail=f"Proxy request failed: {exc}") from exc
 
 	content_type = response.headers.get("content-type", "application/octet-stream")
-	return Response(content=response.content, media_type=content_type)
+	headers: dict[str, str] = {}
+	for key in ("content-length", "accept-ranges", "content-range"):
+		if key in response.headers:
+			headers[key] = response.headers[key]
+
+	def _iter_bytes():
+		try:
+			for chunk in response.iter_bytes(chunk_size=1024 * 256):
+				yield chunk
+		finally:
+			stream.__exit__(None, None, None)
+
+	return StreamingResponse(_iter_bytes(), media_type=content_type, headers=headers)

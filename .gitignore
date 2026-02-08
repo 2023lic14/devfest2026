@@ -24,6 +24,7 @@ web/.turbo/
 web/out/
 web/.env
 web/.env.*
+web/tsconfig.tsbuildinfo
 
 # Node
 node_modules/

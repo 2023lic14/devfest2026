@@ -61,6 +61,10 @@ async def create_moment(
 		if normalized_output_kind:
 			metadata = parsed_blueprint.setdefault("metadata", {})
 			metadata["output_kind"] = normalized_output_kind
+	elif normalized_output_kind:
+		# Persist the requested output kind even when the caller doesn't send a full blueprint.
+		# The Celery pipeline will generate a blueprint server-side and merge this metadata in.
+		parsed_blueprint = {"metadata": {"output_kind": normalized_output_kind}}
 
 	job = Job(
 		id=job_id,

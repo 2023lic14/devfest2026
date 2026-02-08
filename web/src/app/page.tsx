@@ -32,9 +32,11 @@ export default function HomePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [jobIdState, setJobIdState] = useState<string | null>(null);
   const [recordError, setRecordError] = useState<string | null>(null);
+  const [recordSeconds, setRecordSeconds] = useState(0);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
   const [hasStems, setHasStems] = useState(false);
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
   const router = useRouter();
   const params = useSearchParams();
   const jobId = jobIdState ?? params.get("job_id");
@@ -42,6 +44,8 @@ export default function HomePage() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const recordTimerRef = useRef<number | null>(null);
+  const autoStopRef = useRef<number | null>(null);
 
   const trackStatus = useMemo(
     () => [
@@ -64,6 +68,7 @@ export default function HomePage() {
       setJobStatus(null);
       setFinalAudioUrl(null);
       setHasStems(false);
+      setPipelineError(null);
       return;
     }
     let cancelled = false;
@@ -76,8 +81,15 @@ export default function HomePage() {
         if (!cancelled) {
           setJobStatus(status);
           setFinalAudioUrl(typeof data.final_audio_url === "string" ? data.final_audio_url : null);
-          const stems = (data as any)?.blueprint_json?.metadata?.stems;
+          const metadata = (data as any)?.blueprint_json?.metadata;
+          const stems = metadata?.stems;
+          const errorMessage = typeof metadata?.error_message === "string" ? metadata.error_message : null;
+          const stemsError = typeof metadata?.stems_error === "string" ? metadata.stems_error : null;
+          setPipelineError(errorMessage);
           setHasStems(Boolean(stems));
+          if (!cancelled && stemsError && !errorMessage) {
+            setPipelineError(stemsError);
+          }
         }
       } catch {
         // keep polling
@@ -96,12 +108,39 @@ export default function HomePage() {
     };
   }, [apiBase, jobId, router]);
 
+  const chooseMimeType = () => {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+    ];
+    for (const type of candidates) {
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) {
+        return type;
+      }
+    }
+    return "";
+  };
+
+  const mimeToExtension = (mime: string) => {
+    const m = mime.toLowerCase();
+    if (m.includes("mp4")) return "m4a";
+    if (m.includes("webm")) return "webm";
+    return "webm";
+  };
+
   const startRecording = async () => {
     try {
       setRecordError(null);
+      setRecordSeconds(0);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const recorder = new MediaRecorder(stream);
+      const mimeType = chooseMimeType();
+      if (!mimeType) {
+        throw new Error("This browser does not support MediaRecorder audio capture. Try Chrome, or upload a file.");
+      }
+
+      const recorder = new MediaRecorder(stream, { mimeType });
       recorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -113,18 +152,27 @@ export default function HomePage() {
 
       recorder.onstop = async () => {
         setIsRecording(false);
+        if (recordTimerRef.current) {
+          window.clearInterval(recordTimerRef.current);
+          recordTimerRef.current = null;
+        }
+        if (autoStopRef.current) {
+          window.clearTimeout(autoStopRef.current);
+          autoStopRef.current = null;
+        }
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(chunksRef.current, { type: mimeType });
         if (!blob.size) {
           setRecordError("No audio captured.");
           return;
         }
         setIsUploading(true);
         try {
+          const ext = mimeToExtension(mimeType);
           const newJobId = await createMoment({
             file: blob,
-            filename: "hum.webm",
+            filename: `hum.${ext}`,
             apiBase,
             outputKind: "song",
           });
@@ -139,8 +187,17 @@ export default function HomePage() {
         }
       };
 
-      recorder.start();
+      // Timeslice helps ensure we actually receive dataavailable events on some browsers.
+      recorder.start(250);
       setIsRecording(true);
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordSeconds((prev) => prev + 1);
+      }, 1000);
+
+      // Auto-stop so users don't forget to press "Stop" (and so a job actually starts).
+      autoStopRef.current = window.setTimeout(() => {
+        recorderRef.current?.stop();
+      }, 12_000);
     } catch (error) {
       setRecordError(
         error instanceof Error ? error.message : "Microphone permission denied.",
@@ -179,7 +236,7 @@ export default function HomePage() {
         </button>
         <div className="record-status">
           <span>Status:</span>
-          <span>{isRecording ? "Listening" : "Standing by"}</span>
+          <span>{isRecording ? `Listening (${recordSeconds}s)` : "Standing by"}</span>
         </div>
         {recordError && <div className="record-status">{recordError}</div>}
         {jobId && (
@@ -187,6 +244,11 @@ export default function HomePage() {
             <span>
               Job: {jobStatus ?? "Checking..."}
             </span>
+          </div>
+        )}
+        {jobId && pipelineError && (
+          <div className="record-status" style={{ color: "#ffb3b3" }}>
+            Error: {pipelineError}
           </div>
         )}
         {jobId && finalAudioUrl && (

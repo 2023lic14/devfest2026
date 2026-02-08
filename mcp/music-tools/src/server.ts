@@ -15,7 +15,9 @@ import { ErrorObject, ValidateFunction } from "ajv";
 import dotenv from "dotenv";
 import { z } from "zod";
 
-dotenv.config();
+// In local dev, it's common to have stale exported env vars that silently override .env.
+// Default to letting `.env` win to reduce confusion when rotating keys during iteration.
+dotenv.config({ override: true });
 
 type JsonObject = Record<string, unknown>;
 type TransportMode = "stdio" | "http";

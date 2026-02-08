@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import shutil
+import socket
 from urllib.parse import urlsplit
 
 import httpx
@@ -38,6 +40,21 @@ celery_app.conf.task_default_routing_key = settings.celery_queue
 celery_app.conf.task_queues = (Queue(settings.celery_queue, routing_key=settings.celery_queue),)
 
 
+def _is_complete_blueprint(value: Any) -> bool:
+	"""Return True if the dict looks like a full schema payload (not just metadata)."""
+	if not isinstance(value, dict):
+		return False
+	required = ("id", "style", "tempo_bpm", "key", "sections", "lyrics", "voice")
+	if any(k not in value for k in required):
+		return False
+	if not isinstance(value.get("sections"), list) or len(value["sections"]) < 1:
+		return False
+	voice = value.get("voice")
+	if not isinstance(voice, dict) or not voice.get("voice_id"):
+		return False
+	return True
+
+
 def _update_job(job_id: str, **fields: Any) -> None:
 	"""Persist job state changes from background tasks."""
 	with session_scope() as session:
@@ -52,14 +69,21 @@ def _update_job_metadata(job_id: str, **metadata_updates: Any) -> None:
 	"""Merge metadata into the blueprint JSON payload."""
 	with session_scope() as session:
 		job = session.get(Job, job_id)
-		if not job or not job.blueprint_json:
+		if not job:
 			return
-		blueprint = job.blueprint_json
+		blueprint = job.blueprint_json or {}
 		metadata = blueprint.setdefault("metadata", {})
 		metadata.update(metadata_updates)
 		job.blueprint_json = dict(blueprint)
 		session.add(job)
 		flag_modified(job, "blueprint_json")
+
+
+def _fail_job(job_id: str, stage: str, exc: Exception) -> None:
+	"""Persist an error into blueprint metadata and mark the job completed to stop polling."""
+	message = str(exc).strip() or exc.__class__.__name__
+	_update_job_metadata(job_id, error_stage=stage, error_message=message)
+	_update_job(job_id, status=JobStatus.completed)
 
 
 def _default_blueprint(job_id: str, original_audio_url: str) -> Dict[str, Any]:
@@ -107,26 +131,43 @@ def _default_blueprint(job_id: str, original_audio_url: str) -> Dict[str, Any]:
 def generate_blueprint(job_id: str) -> Dict[str, Any]:
 	"""Generate (or reuse) a blueprint and validate it with MCP."""
 	_update_job(job_id, status=JobStatus.analyzing)
+	_update_job_metadata(job_id, worker_host=socket.gethostname(), worker_pid=os.getpid())
 
 	with session_scope() as session:
 		job = session.get(Job, job_id)
 		if not job:
 			return {"job_id": job_id, "blueprint": {}}
 
-		if job.blueprint_json:
-			blueprint = job.blueprint_json
-		else:
-			# Server-side "record -> upload -> blueprint" path for the frontend.
-			transcript = transcribe_audio_from_url(job.original_audio_url)
-			blueprint = generate_blueprint_from_transcript(transcript, job_id=job_id)
+		try:
+			seed_metadata: Dict[str, Any] = {}
+			if isinstance(job.blueprint_json, dict):
+				seed_metadata = dict(job.blueprint_json.get("metadata") or {})
 
-		director = MCPDirector()
-		validation = director.validate_blueprint(blueprint)
-		if isinstance(validation, dict):
+			if job.blueprint_json and _is_complete_blueprint(job.blueprint_json):
+				blueprint = job.blueprint_json
+			else:
+				# Server-side "record -> upload -> blueprint" path for the frontend.
+				_update_job_metadata(job_id, ai_stage="transcribing")
+				transcript = transcribe_audio_from_url(job.original_audio_url)
+				_update_job_metadata(job_id, transcript_len=len(transcript))
+				_update_job_metadata(job_id, ai_stage="blueprint")
+				blueprint = generate_blueprint_from_transcript(transcript, job_id=job_id)
+
+			# Always carry through request-scoped metadata (e.g. output_kind) into the final blueprint.
 			metadata = blueprint.setdefault("metadata", {})
-			metadata["validation"] = validation.get("structuredContent", validation)
+			metadata.update(seed_metadata)
 
-		job.blueprint_json = blueprint
+			_update_job_metadata(job_id, ai_stage="validating")
+			director = MCPDirector()
+			validation = director.validate_blueprint(blueprint)
+			if isinstance(validation, dict):
+				metadata = blueprint.setdefault("metadata", {})
+				metadata["validation"] = validation.get("structuredContent", validation)
+
+			job.blueprint_json = blueprint
+		except Exception as exc:
+			_fail_job(job_id, "ANALYZING", exc if isinstance(exc, Exception) else Exception(str(exc)))
+			raise
 
 	return {"job_id": job_id, "blueprint": blueprint, "validation": validation}
 
@@ -169,6 +210,7 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 		raise RuntimeError("Missing job_id in asset payloads.")
 
 	_update_job(job_id, status=JobStatus.mixing)
+	_update_job_metadata(job_id, worker_host=socket.gethostname(), worker_pid=os.getpid())
 
 	vocals = next((a for a in assets if a.get("type") == "vocals"), {})
 	instrumental = next((a for a in assets if a.get("type") == "instrumental"), {})
@@ -202,25 +244,31 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 	timeout = settings.mcp_song_timeout_seconds if output_kind == "song" else settings.mcp_timeout_seconds
 	director = MCPDirector(timeout_seconds=timeout)
 
-	if output_kind == "song":
-		_update_job_metadata(job_id, mcp_tool_used="create_song")
-		synthesis = director.create_song(
-			blueprint=blueprint,
-			prompt=settings.mcp_song_prompt,
-			model_id=settings.mcp_song_model_id,
-			music_length_ms=settings.mcp_song_length_ms,
-			force_instrumental=settings.mcp_song_force_instrumental,
-			output_format=settings.mcp_song_output_format,
-		)
-	else:
-		_update_job_metadata(job_id, mcp_tool_used="synthesize_preview")
-		if not voice_id:
-			raise RuntimeError("Missing voice_id for ElevenLabs synthesis. Set ELEVENLABS_DEFAULT_VOICE_ID.")
-		synthesis = director.synthesize_preview(text=lyrics, voice_id=voice_id, model_id=model_id)
+	try:
+		if output_kind == "song":
+			_update_job_metadata(job_id, mcp_tool_used="create_song")
+			synthesis = director.create_song(
+				blueprint=blueprint,
+				prompt=settings.mcp_song_prompt,
+				model_id=settings.mcp_song_model_id,
+				music_length_ms=settings.mcp_song_length_ms,
+				force_instrumental=settings.mcp_song_force_instrumental,
+				output_format=settings.mcp_song_output_format,
+			)
+		else:
+			_update_job_metadata(job_id, mcp_tool_used="synthesize_preview")
+			if not voice_id:
+				raise RuntimeError("Missing voice_id for ElevenLabs synthesis. Set ELEVENLABS_DEFAULT_VOICE_ID.")
+			synthesis = director.synthesize_preview(text=lyrics, voice_id=voice_id, model_id=model_id)
+	except Exception as exc:
+		_fail_job(job_id, "MIXING", exc if isinstance(exc, Exception) else Exception(str(exc)))
+		raise
 
 	structured = synthesis.get("structuredContent", {}) if isinstance(synthesis, dict) else {}
 	if not structured.get("ok"):
-		raise RuntimeError(f"MCP synthesis failed: {structured}")
+		error = RuntimeError(f"MCP synthesis failed: {structured}")
+		_fail_job(job_id, "MIXING", error)
+		raise error
 	output_path = structured.get("output_path")
 	if not output_path or not os.path.exists(output_path):
 		raise RuntimeError("MCP synthesis output file not found.")
@@ -242,6 +290,7 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 	final_audio_url = payload.get("final_audio_url")
 	if not job_id or not final_audio_url:
 		return payload
+	_update_job_metadata(job_id, stems_worker_host=socket.gethostname(), stems_worker_pid=os.getpid())
 
 	parsed = urlsplit(final_audio_url)
 	_, ext = os.path.splitext(parsed.path)
@@ -255,35 +304,91 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 				for chunk in response.iter_bytes():
 					audio_file.write(chunk)
 
-		wav_path = os.path.join(temp_dir, "final.wav")
-		try:
-			subprocess.run(
-				["ffmpeg", "-y", "-i", input_path, "-ac", "2", "-ar", "44100", wav_path],
-				check=True,
-				stdout=subprocess.DEVNULL,
-				stderr=subprocess.DEVNULL,
-			)
-			demucs_input = wav_path
-		except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-			_update_job_metadata(job_id, stems_error=f"ffmpeg failed: {exc}")
-			return payload
+		# Demucs prefers WAV input. If the final mix is already WAV, skip conversion.
+		if input_ext.lower() == ".wav":
+			demucs_input = input_path
+		else:
+			wav_path = os.path.join(temp_dir, "final.wav")
+			ffmpeg_exe = shutil.which("ffmpeg")
+			if not ffmpeg_exe:
+				_update_job_metadata(
+					job_id,
+					stems_error="ffmpeg not found on PATH. Install it (macOS: `brew install ffmpeg`; conda: `conda install -c conda-forge ffmpeg`) to enable stems.",
+				)
+				return payload
+			try:
+				subprocess.run(
+					[ffmpeg_exe, "-y", "-i", input_path, "-ac", "2", "-ar", "44100", wav_path],
+					check=True,
+					stdout=subprocess.DEVNULL,
+					stderr=subprocess.DEVNULL,
+				)
+				demucs_input = wav_path
+			except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+				_update_job_metadata(job_id, stems_error=f"ffmpeg failed: {exc}")
+				return payload
 
 		output_dir = os.path.join(temp_dir, "demucs")
+		# Ensure Demucs/torch can write its model cache even in restricted environments.
+		torch_home = os.path.join(settings.temp_dir, "torch-cache")
+		xdg_cache = os.path.join(settings.temp_dir, "xdg-cache")
+		os.makedirs(torch_home, exist_ok=True)
+		os.makedirs(xdg_cache, exist_ok=True)
+		env = dict(os.environ)
+		# Force a writable cache location (some environments set TORCH_HOME to a locked directory).
+		env["TORCH_HOME"] = torch_home
+		env["XDG_CACHE_HOME"] = xdg_cache
+		# Fix common macOS/python.org certificate issues when torch.hub downloads model weights.
+		try:
+			import certifi  # type: ignore
+
+			env["SSL_CERT_FILE"] = certifi.where()
+			env["REQUESTS_CA_BUNDLE"] = env["SSL_CERT_FILE"]
+		except Exception:
+			pass
+		_update_job_metadata(
+			job_id,
+			torch_home=torch_home,
+			ssl_cert_file=env.get("SSL_CERT_FILE"),
+		)
+
 		command = [
 			sys.executable,
 			"-m",
 			"demucs",
 			"-n",
 			"htdemucs",
+			"--device",
+			"cpu",
+			"--segment",
+			# htdemucs is a transformer model and cannot use long segments (> ~7.8s).
+			"7",
+			"-j",
+			"1",
 			"--out",
 			output_dir,
 			demucs_input,
 		]
 		try:
-			subprocess.run(command, check=True)
+			result = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
 		except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-			_update_job_metadata(job_id, stems_error=str(exc))
+			# Demucs failures are often environmental (model download, torch, memory). Capture stderr to help debug.
+			stderr = ""
+			stdout = ""
+			if isinstance(exc, subprocess.CalledProcessError):
+				stderr = (exc.stderr or "")[-4000:]
+				stdout = (exc.stdout or "")[-2000:]
+			_update_job_metadata(
+				job_id,
+				stems_error=str(exc),
+				stems_error_detail="\n".join([p for p in [stderr.strip(), stdout.strip()] if p]),
+				torch_home=torch_home,
+			)
 			return payload
+		else:
+			# Keep a small snippet for debugging without flooding storage.
+			if result.stderr:
+				_update_job_metadata(job_id, stems_debug=(result.stderr or "")[-1000:])
 
 		base_name = os.path.splitext(os.path.basename(demucs_input))[0]
 		stem_dir = os.path.join(output_dir, "htdemucs", base_name)

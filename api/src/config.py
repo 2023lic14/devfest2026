@@ -7,6 +7,9 @@ the API root to support local development.
 """
 
 from pathlib import Path
+import os
+import re
+import socket
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field
@@ -14,6 +17,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _default_celery_queue() -> str:
+	"""Default to a per-machine queue to avoid consuming jobs from shared brokers."""
+	user = os.environ.get("USER") or os.environ.get("USERNAME") or "local"
+	host = socket.gethostname().split(".", 1)[0] or "host"
+	queue = f"devfest2026.{user}.{host}"
+	return re.sub(r"[^a-zA-Z0-9_.-]+", "_", queue)[:128]
 
 
 class Settings(BaseSettings):
@@ -30,7 +41,7 @@ class Settings(BaseSettings):
 	celery_result_backend: str = "redis://localhost:6379/1"
 	# When using a shared broker (hosted Redis/Valkey), set this to a unique name and run your
 	# worker with `-Q <queue>` so other workers can't accidentally consume your jobs.
-	celery_queue: str = Field(default="celery", alias="CELERY_QUEUE")
+	celery_queue: str = Field(default_factory=_default_celery_queue, alias="CELERY_QUEUE")
 
 	do_spaces_key: str = ""
 	do_spaces_secret: str = ""
@@ -46,10 +57,10 @@ class Settings(BaseSettings):
 	default_voice_id: str = Field(default="", alias="ELEVENLABS_DEFAULT_VOICE_ID")
 	# Controls whether the backend asks MCP to synthesize a TTS preview or a full song.
 	# Values: "preview" (default) or "song".
-	mcp_output_kind: str = Field(default="preview", alias="MCP_OUTPUT_KIND")
+	mcp_output_kind: str = Field(default="song", alias="MCP_OUTPUT_KIND")
 
 	# Optional knobs for MCP create_song (ElevenLabs Music) when output_kind == "song".
-	mcp_song_timeout_seconds: float = Field(default=300.0, alias="MCP_SONG_TIMEOUT_SECONDS")
+	mcp_song_timeout_seconds: float = Field(default=600.0, alias="MCP_SONG_TIMEOUT_SECONDS")
 	mcp_song_model_id: str | None = Field(default=None, alias="MCP_SONG_MODEL_ID")
 	mcp_song_prompt: str | None = Field(default=None, alias="MCP_SONG_PROMPT")
 	mcp_song_length_ms: int = Field(default=180000, alias="MCP_SONG_LENGTH_MS")
@@ -62,7 +73,14 @@ class Settings(BaseSettings):
 	openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
 	openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
 	openai_transcribe_model: str = Field(default="gpt-4o-transcribe", alias="OPENAI_TRANSCRIBE_MODEL")
-	openai_timeout_seconds: float = Field(default=60.0, alias="OPENAI_TIMEOUT_SECONDS")
+	openai_timeout_seconds: float = Field(default=120.0, alias="OPENAI_TIMEOUT_SECONDS")
+
+	# Comma-separated list of allowed CORS origins for local dev.
+	# Example: "http://localhost:3000,http://127.0.0.1:3000"
+	cors_allow_origins: str = Field(
+		default="http://localhost:3000,http://127.0.0.1:3000",
+		alias="CORS_ALLOW_ORIGINS",
+	)
 
 
 settings = Settings()

@@ -25,6 +25,8 @@ type StatusResponse = {
   blueprint_json?: {
     metadata?: {
       stems?: Record<string, string>;
+      stems_error?: string;
+      stems_error_detail?: string;
     };
   };
 };
@@ -56,6 +58,8 @@ export default function MultiTrackEditor({ jobId }: MultiTrackEditorProps) {
   const [tracks, setTracks] = useState<Track[]>(defaultTracks);
   const [statuses, setStatuses] = useState<Record<string, TrackStatus>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [stemsLoading, setStemsLoading] = useState(false);
+  const [stemsNote, setStemsNote] = useState<string | null>(null);
   const containerRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const instancesRef = useRef<Record<string, { url: string; ws: WaveSurfer }>>(
     {},
@@ -71,37 +75,68 @@ export default function MultiTrackEditor({ jobId }: MultiTrackEditorProps) {
       return;
     }
     let cancelled = false;
-    const loadStems = async () => {
+    let timeoutId: number | null = null;
+
+    const pollStems = async (deadlineMs: number) => {
       setLoadError(null);
+      setStemsLoading(true);
+      setStemsNote("Waiting for stems...");
       try {
         const response = await fetch(`${apiBase}/v1/status/${jobId}`);
         if (!response.ok) {
           throw new Error(`Status ${response.status}`);
         }
         const data = (await response.json()) as StatusResponse;
-        const stems = data.blueprint_json?.metadata?.stems;
-        if (!stems) {
-          throw new Error("No stems found for this job.");
+        const meta = data.blueprint_json?.metadata;
+        const stems = meta?.stems;
+        const stemsError = meta?.stems_error;
+        const stemsErrorDetail = meta?.stems_error_detail;
+
+        if (stemsError) {
+          throw new Error([stemsError, stemsErrorDetail].filter(Boolean).join("\n"));
         }
-        if (cancelled) {
+
+        if (stems && Object.keys(stems).length > 0) {
+          if (cancelled) {
+            return;
+          }
+          setTracks((prev) =>
+            prev.map((track) => ({
+              ...track,
+              url: stems[track.id] ?? track.url,
+            })),
+          );
+          setStemsNote("Stems loaded.");
+          setStemsLoading(false);
           return;
         }
-        setTracks((prev) =>
-          prev.map((track) => ({
-            ...track,
-            url: stems[track.id] ?? track.url,
-          })),
-        );
       } catch (error) {
         if (cancelled) {
           return;
         }
         setLoadError(error instanceof Error ? error.message : "Failed to load stems.");
+        setStemsLoading(false);
+        setStemsNote(null);
+        return;
       }
+
+      if (cancelled) {
+        return;
+      }
+      if (Date.now() >= deadlineMs) {
+        setStemsLoading(false);
+        setStemsNote("Stems not ready yet. Keep this page open or paste URLs manually.");
+        return;
+      }
+      timeoutId = window.setTimeout(() => pollStems(deadlineMs), 2500);
     };
-    loadStems();
+
+    pollStems(Date.now() + 90_000);
     return () => {
       cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [jobId]);
 
@@ -218,6 +253,7 @@ export default function MultiTrackEditor({ jobId }: MultiTrackEditorProps) {
       <p className="prompt-note">
         Paste stem URLs from `blueprint_json.metadata.stems` and control each track.
       </p>
+      {stemsNote && <p className="track-status">{stemsLoading ? stemsNote : stemsNote}</p>}
       {loadError && <p className="track-status">Auto-load failed: {loadError}</p>}
       <div className="script-view">
         {tracks.map((track) => (
