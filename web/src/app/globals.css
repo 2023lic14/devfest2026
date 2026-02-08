@@ -238,6 +238,42 @@ a {
   font-size: 0.9rem;
 }
 
+.track-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke-soft);
+  background: rgba(7, 7, 10, 0.4);
+  color: var(--text-primary);
+  font-family: var(--font-mono), monospace;
+}
+
+.track-controls,
+.track-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ghost-button {
+  padding: 12px 20px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke-soft);
+  background: rgba(36, 40, 59, 0.4);
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 @keyframes drift {
   0%,
   100% {
