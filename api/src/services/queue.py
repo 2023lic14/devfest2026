@@ -8,8 +8,15 @@ This module defines the chainable tasks used by the API to process a
 
 from typing import Any, Dict
 import os
+import subprocess
+import sys
+import tempfile
+from urllib.parse import urlsplit
+
+import httpx
 
 from celery import Celery
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import settings
 from src.models.schemas import Job, JobStatus, load_blueprint_schema
@@ -32,6 +39,20 @@ def _update_job(job_id: str, **fields: Any) -> None:
 			return
 		for key, value in fields.items():
 			setattr(job, key, value)
+
+
+def _update_job_metadata(job_id: str, **metadata_updates: Any) -> None:
+	"""Merge metadata into the blueprint JSON payload."""
+	with session_scope() as session:
+		job = session.get(Job, job_id)
+		if not job or not job.blueprint_json:
+			return
+		blueprint = job.blueprint_json
+		metadata = blueprint.setdefault("metadata", {})
+		metadata.update(metadata_updates)
+		job.blueprint_json = dict(blueprint)
+		session.add(job)
+		flag_modified(job, "blueprint_json")
 
 
 def _default_blueprint(job_id: str, original_audio_url: str) -> Dict[str, Any]:
@@ -175,3 +196,75 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 	_update_job(job_id, status=JobStatus.completed, final_audio_url=final_audio_url)
 
 	return {"job_id": job_id, "ffmpeg": ffmpeg_command, "final_audio_url": final_audio_url}
+
+
+@celery_app.task(name="separate_stems")
+def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
+	"""Split the final mix into stems for manual editing."""
+	job_id = payload.get("job_id")
+	final_audio_url = payload.get("final_audio_url")
+	if not job_id or not final_audio_url:
+		return payload
+
+	parsed = urlsplit(final_audio_url)
+	_, ext = os.path.splitext(parsed.path)
+	input_ext = ext or ".mp3"
+
+	with tempfile.TemporaryDirectory(prefix=f"stems_{job_id}_") as temp_dir:
+		input_path = os.path.join(temp_dir, f"final{input_ext}")
+		with httpx.stream("GET", final_audio_url, timeout=60.0) as response:
+			response.raise_for_status()
+			with open(input_path, "wb") as audio_file:
+				for chunk in response.iter_bytes():
+					audio_file.write(chunk)
+
+		wav_path = os.path.join(temp_dir, "final.wav")
+		try:
+			subprocess.run(
+				["ffmpeg", "-y", "-i", input_path, "-ac", "2", "-ar", "44100", wav_path],
+				check=True,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+			)
+			demucs_input = wav_path
+		except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+			_update_job_metadata(job_id, stems_error=f"ffmpeg failed: {exc}")
+			return payload
+
+		output_dir = os.path.join(temp_dir, "demucs")
+		command = [
+			sys.executable,
+			"-m",
+			"demucs",
+			"-n",
+			"htdemucs",
+			"--out",
+			output_dir,
+			demucs_input,
+		]
+		try:
+			subprocess.run(command, check=True)
+		except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+			_update_job_metadata(job_id, stems_error=str(exc))
+			return payload
+
+		base_name = os.path.splitext(os.path.basename(demucs_input))[0]
+		stem_dir = os.path.join(output_dir, "htdemucs", base_name)
+		if not os.path.isdir(stem_dir):
+			_update_job_metadata(job_id, stems_error="Stem output folder not found.")
+			return payload
+
+		stems: Dict[str, str] = {}
+		for stem_name in ("vocals", "drums", "bass", "other"):
+			stem_path = os.path.join(stem_dir, f"{stem_name}.wav")
+			if not os.path.exists(stem_path):
+				continue
+			object_name = f"renders/{job_id}/stems/{stem_name}.wav"
+			stems[stem_name] = upload_to_spaces(stem_path, object_name)
+
+		if stems:
+			_update_job_metadata(job_id, stems=stems)
+		else:
+			_update_job_metadata(job_id, stems_error="No stems produced.")
+
+	return payload

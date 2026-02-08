@@ -10,3 +10,32 @@ mcp/music-tools/.env.*
 mcp/music-tools/node_modules/
 mcp/music-tools/dist/
 mcp/.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Next.js / web
+web/node_modules/
+web/.next/
+web/.turbo/
+web/out/
+web/.env
+web/.env.*
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp_audio/
+audio-previews/
+celery.log
