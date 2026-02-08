@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import StartupSplash from "./StartupSplash";
 
@@ -28,11 +28,17 @@ const spectrumBars = Array.from({ length: 18 }, (_, index) => ({
 
 export default function HomePage() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [jobIdState, setJobIdState] = useState<string | null>(null);
+  const [recordError, setRecordError] = useState<string | null>(null);
   const [stemStatus, setStemStatus] = useState<"idle" | "loading" | "ready">("idle");
   const router = useRouter();
   const params = useSearchParams();
-  const jobId = params.get("job_id");
+  const jobId = jobIdState ?? params.get("job_id");
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const trackStatus = useMemo(
     () => [
@@ -91,9 +97,73 @@ export default function HomePage() {
     };
   }, [apiBase, jobId, router]);
 
+  const startRecording = async () => {
+    try {
+      setRecordError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        setIsRecording(false);
+        stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        if (!blob.size) {
+          setRecordError("No audio captured.");
+          return;
+        }
+        setIsUploading(true);
+        try {
+          const form = new FormData();
+          form.append("file", blob, "hum.webm");
+          const response = await fetch(`${apiBase}/v1/create-moment`, {
+            method: "POST",
+            body: form,
+          });
+          if (!response.ok) {
+            throw new Error(`Upload failed (${response.status})`);
+          }
+          const data = await response.json();
+          const newJobId = data?.job_id as string | undefined;
+          if (!newJobId) {
+            throw new Error("Missing job id from API.");
+          }
+          setJobIdState(newJobId);
+          router.push(`/?job_id=${newJobId}`);
+        } catch (error) {
+          setRecordError(
+            error instanceof Error ? error.message : "Upload failed.",
+          );
+        } finally {
+          setIsUploading(false);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      setRecordError(
+        error instanceof Error ? error.message : "Microphone permission denied.",
+      );
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    recorderRef.current?.stop();
+  };
+
   return (
     <main className="page" data-recording={isRecording}>
-      <StartupSplash active={isRecording} />
       <section className="hero">
         <p className="tagline">
           Turn your hum into a cinematic score. Your Overture starts now.
@@ -106,15 +176,21 @@ export default function HomePage() {
         <button
           className="record-button"
           data-active={isRecording}
-          onClick={() => setIsRecording((prev) => !prev)}
+          onClick={isRecording ? stopRecording : startRecording}
           type="button"
+          disabled={isUploading}
         >
-          {isRecording ? "Recording live" : "Record your hum"}
+          {isUploading
+            ? "Uploading..."
+            : isRecording
+              ? "Stop recording"
+              : "Record your hum"}
         </button>
         <div className="record-status">
           <span>Status:</span>
           <span>{isRecording ? "Listening" : "Standing by"}</span>
         </div>
+        {recordError && <div className="record-status">{recordError}</div>}
         {jobId && (
           <div className="record-status">
             <span>Stems:</span>
