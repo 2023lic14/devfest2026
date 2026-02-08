@@ -269,14 +269,18 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 		error = RuntimeError(f"MCP synthesis failed: {structured}")
 		_fail_job(job_id, "MIXING", error)
 		raise error
-	output_path = structured.get("output_path")
-	if not output_path or not os.path.exists(output_path):
-		raise RuntimeError("MCP synthesis output file not found.")
+	output_url = structured.get("output_url")
+	if isinstance(output_url, str) and output_url.strip():
+		final_audio_url = output_url.strip()
+	else:
+		output_path = structured.get("output_path")
+		if not output_path or not os.path.exists(output_path):
+			raise RuntimeError("MCP synthesis output file not found.")
 
-	_, ext = os.path.splitext(output_path)
-	final_ext = ext.lstrip(".") or "mp3"
-	final_object_name = f"renders/{job_id}/final.{final_ext}"
-	final_audio_url = upload_to_spaces(output_path, final_object_name)
+		_, ext = os.path.splitext(output_path)
+		final_ext = ext.lstrip(".") or "mp3"
+		final_object_name = f"renders/{job_id}/final.{final_ext}"
+		final_audio_url = upload_to_spaces(output_path, final_object_name)
 
 	_update_job(job_id, status=JobStatus.completed, final_audio_url=final_audio_url)
 

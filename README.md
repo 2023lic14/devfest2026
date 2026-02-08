@@ -91,7 +91,7 @@ Run the web frontend:
 ```
 cd web
 npm install
-NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001 npm run dev
+NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 npm run dev
 ```
 
 ## Record Mic Audio -> Song (Local)
@@ -99,7 +99,7 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001 npm run dev
 Once API + worker + MCP server are running, record a clip and run the full pipeline:
 
 ```
-python audio/record_to_song.py --api http://127.0.0.1:8001 --kind song
+python audio/record_to_song.py --api http://127.0.0.1:8000 --kind song
 ```
 
 ## Notes

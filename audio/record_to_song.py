@@ -16,6 +16,7 @@ Prereqs:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -90,7 +91,12 @@ def main() -> int:
     parser.add_argument("--duration", type=float, default=15.0, help="Recording duration in seconds (default: 15).")
     parser.add_argument("--sample-rate", type=int, default=44100, help="Recording sample rate (default: 44100).")
     parser.add_argument("--channels", type=int, default=1, help="Number of mic channels (default: 1).")
-    parser.add_argument("--api", default="http://127.0.0.1:8001", help="Backend base URL (default: http://127.0.0.1:8001).")
+    default_api = os.environ.get("MOMENT_API_BASE_URL", "http://127.0.0.1:8000")
+    parser.add_argument(
+        "--api",
+        default=default_api,
+        help="Backend base URL (default: MOMENT_API_BASE_URL or http://127.0.0.1:8000).",
+    )
     parser.add_argument("--kind", default="song", choices=["song", "preview"], help="Output kind (default: song).")
     args = parser.parse_args()
 

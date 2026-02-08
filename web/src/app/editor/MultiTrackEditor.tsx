@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { buildProxyAudioUrl, getApiBase } from "../../lib/api";
 
 type Track = {
   id: string;
@@ -50,9 +51,7 @@ const applyMute = (ws: WaveSurfer, muted: boolean) => {
   }
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001";
-const buildProxyUrl = (rawUrl: string) =>
-  `${apiBase}/v1/proxy-audio?url=${encodeURIComponent(rawUrl)}`;
+const apiBase = getApiBase();
 
 export default function MultiTrackEditor({ jobId }: MultiTrackEditorProps) {
   const [tracks, setTracks] = useState<Track[]>(defaultTracks);
@@ -171,7 +170,7 @@ export default function MultiTrackEditor({ jobId }: MultiTrackEditorProps) {
 
       const ws = WaveSurfer.create({
         container,
-        url: buildProxyUrl(track.url),
+        url: buildProxyAudioUrl(track.url, apiBase),
         waveColor: "rgba(185, 167, 255, 0.6)",
         progressColor: "rgba(182, 255, 59, 0.9)",
         cursorColor: "rgba(182, 255, 59, 0.8)",

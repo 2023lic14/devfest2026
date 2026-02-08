@@ -10,6 +10,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { ErrorObject, ValidateFunction } from "ajv";
 import dotenv from "dotenv";
@@ -26,6 +27,12 @@ type BlueprintValidator = ValidateFunction<unknown>;
 type ExpressLikeRequest = any;
 type ExpressLikeResponse = any;
 type ExpressNext = () => void;
+type SpacesConfig = {
+  bucket: string;
+  client: S3Client;
+  publicBaseUrl: string;
+  prefix: string;
+};
 
 interface RuntimeConfig {
   transport: TransportMode;
@@ -354,6 +361,66 @@ async function loadBlueprintValidator() {
   return { schemaPath, validate };
 }
 
+function resolveSpacesConfig(): SpacesConfig | null {
+  const bucket = process.env.DO_SPACES_BUCKET;
+  const endpoint = process.env.DO_SPACES_ENDPOINT;
+  const region = process.env.DO_SPACES_REGION;
+  const accessKeyId = process.env.DO_SPACES_KEY;
+  const secretAccessKey = process.env.DO_SPACES_SECRET;
+
+  if (!bucket || !endpoint || !region || !accessKeyId || !secretAccessKey) {
+    return null;
+  }
+
+  const publicBaseUrl = (process.env.DO_SPACES_PUBLIC_BASE_URL
+    ?? `${endpoint.replace(/\/+$/, "")}/${bucket}`)
+    .replace(/\/+$/, "");
+  const prefix = (process.env.DO_SPACES_PREFIX ?? "mcp/outputs")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+
+  return {
+    bucket,
+    publicBaseUrl,
+    prefix,
+    client: new S3Client({
+      region,
+      endpoint,
+      credentials: {
+        accessKeyId,
+        secretAccessKey
+      }
+    })
+  };
+}
+
+async function uploadToSpaces(args: {
+  filePath: string;
+  contentType: string;
+  outputKind: string;
+}): Promise<{ url: string; key: string } | null> {
+  const spaces = resolveSpacesConfig();
+  if (!spaces) {
+    return null;
+  }
+
+  const filename = path.basename(args.filePath);
+  const key = [spaces.prefix, args.outputKind, filename].filter(Boolean).join("/");
+  const body = await readFile(args.filePath);
+
+  await spaces.client.send(
+    new PutObjectCommand({
+      Bucket: spaces.bucket,
+      Key: key,
+      Body: body,
+      ContentType: args.contentType,
+      ACL: "public-read"
+    })
+  );
+
+  return { url: `${spaces.publicBaseUrl}/${key}`, key };
+}
+
 async function synthesizePreview(args: {
   text?: string;
   blueprint?: Blueprint;
@@ -419,6 +486,11 @@ async function synthesizePreview(args: {
   const filename = `${outputPrefix}-${Date.now()}-${randomUUID().slice(0, 8)}.mp3`;
   const outputPath = path.resolve(outputDir, filename);
   await writeFile(outputPath, audio);
+  const upload = await uploadToSpaces({
+    filePath: outputPath,
+    contentType: "audio/mpeg",
+    outputKind: outputPrefix
+  });
 
   return {
     content: [
@@ -430,6 +502,8 @@ async function synthesizePreview(args: {
     structuredContent: {
       ok: true,
       output_path: outputPath,
+      output_url: upload?.url,
+      output_key: upload?.key,
       bytes: audio.byteLength,
       mime_type: "audio/mpeg",
       output_kind: outputPrefix,
@@ -669,6 +743,11 @@ async function composeSongWithElevenMusic(args: {
   const filename = `song-${Date.now()}-${randomUUID().slice(0, 8)}.${extension}`;
   const outputPath = path.resolve(outputDir, filename);
   await writeFile(outputPath, audio);
+  const upload = await uploadToSpaces({
+    filePath: outputPath,
+    contentType: outputFormatToMimeType(outputFormat),
+    outputKind: "song"
+  });
 
   return {
     content: [
@@ -680,6 +759,8 @@ async function composeSongWithElevenMusic(args: {
     structuredContent: {
       ok: true,
       output_path: outputPath,
+      output_url: upload?.url,
+      output_key: upload?.key,
       bytes: audio.byteLength,
       mime_type: outputFormatToMimeType(outputFormat),
       output_kind: "song",
