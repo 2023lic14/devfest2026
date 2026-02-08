@@ -45,22 +45,26 @@ class MCPDirector:
 			self._session_id = session_id
 
 	def _post(self, payload: Dict[str, Any], include_session: bool = True) -> Dict[str, Any]:
-		with httpx.Client(timeout=self.timeout_seconds) as client:
-			response = client.post(
+		# MCP Streamable HTTP may reply as SSE (text/event-stream) and keep the connection open.
+		# We must stream and stop once we see a terminal payload (e.g. data: [DONE]).
+		timeout = httpx.Timeout(self.timeout_seconds)
+		with httpx.Client(timeout=timeout) as client:
+			with client.stream(
+				"POST",
 				self.server_url,
 				json=payload,
 				headers=self._headers(include_session=include_session),
-			)
-			self._update_session_id(response)
-			content_type = response.headers.get("content-type", "")
-			if "text/event-stream" in content_type:
-				data = self._parse_event_stream(response.text)
-			else:
-				try:
-					data = response.json()
-				except ValueError:
-					response.raise_for_status()
-					raise
+			) as response:
+				self._update_session_id(response)
+				content_type = response.headers.get("content-type", "")
+				if "text/event-stream" in content_type:
+					data = self._parse_event_stream_stream(response)
+				else:
+					try:
+						data = response.json()
+					except ValueError:
+						response.raise_for_status()
+						raise
 
 		if response.status_code >= 400:
 			if isinstance(data, dict) and "error" in data:
@@ -71,6 +75,25 @@ class MCPDirector:
 			raise RuntimeError(data["error"])
 
 		return data
+
+	def _parse_event_stream_stream(self, response: httpx.Response) -> Dict[str, Any]:
+		data_lines: list[str] = []
+		for line in response.iter_lines():
+			line = line.strip()
+			if not line or not line.startswith("data:"):
+				continue
+			value = line[5:].strip()
+			if not value:
+				continue
+			if value == "[DONE]":
+				break
+			data_lines.append(value)
+		for raw in reversed(data_lines):
+			try:
+				return json.loads(raw)
+			except json.JSONDecodeError:
+				continue
+		raise ValueError("No JSON payload found in MCP event stream response.")
 
 	def _parse_event_stream(self, body: str) -> Dict[str, Any]:
 		data_lines = []

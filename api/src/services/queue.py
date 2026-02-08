@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from celery import Celery
+from kombu import Queue
 from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import settings
@@ -29,6 +30,11 @@ celery_app = Celery(
 	broker=settings.celery_broker_url,
 	backend=settings.celery_result_backend,
 )
+
+# Route all tasks to a dedicated queue by default (important when using a shared broker).
+celery_app.conf.task_default_queue = settings.celery_queue
+celery_app.conf.task_default_routing_key = settings.celery_queue
+celery_app.conf.task_queues = (Queue(settings.celery_queue, routing_key=settings.celery_queue),)
 
 
 def _update_job(job_id: str, **fields: Any) -> None:
@@ -173,7 +179,12 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 		blueprint = job.blueprint_json
 
 	metadata = blueprint.get("metadata", {}) if isinstance(blueprint, dict) else {}
-	output_kind = (metadata.get("output_kind") or settings.mcp_output_kind or "preview").lower()
+	raw_output_kind = metadata.get("output_kind") or settings.mcp_output_kind or "preview"
+	output_kind = str(raw_output_kind).strip().lower()
+	if output_kind not in {"preview", "song"}:
+		output_kind = "preview"
+
+	_update_job_metadata(job_id, output_kind=output_kind)
 
 	voice = blueprint.get("voice", {}) if isinstance(blueprint, dict) else {}
 	voice_id = voice.get("voice_id") or settings.default_voice_id
@@ -185,6 +196,7 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 	director = MCPDirector(timeout_seconds=timeout)
 
 	if output_kind == "song":
+		_update_job_metadata(job_id, mcp_tool_used="create_song")
 		synthesis = director.create_song(
 			blueprint=blueprint,
 			prompt=settings.mcp_song_prompt,
@@ -194,6 +206,7 @@ def mix_and_master(assets: list[Dict[str, Any]]) -> Dict[str, Any]:
 			output_format=settings.mcp_song_output_format,
 		)
 	else:
+		_update_job_metadata(job_id, mcp_tool_used="synthesize_preview")
 		if not voice_id:
 			raise RuntimeError("Missing voice_id for ElevenLabs synthesis. Set ELEVENLABS_DEFAULT_VOICE_ID.")
 		synthesis = director.synthesize_preview(text=lyrics, voice_id=voice_id, model_id=model_id)

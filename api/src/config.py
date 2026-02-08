@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 	database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/devfest"
 	celery_broker_url: str = "redis://localhost:6379/0"
 	celery_result_backend: str = "redis://localhost:6379/1"
+	# When using a shared broker (hosted Redis/Valkey), set this to a unique name and run your
+	# worker with `-Q <queue>` so other workers can't accidentally consume your jobs.
+	celery_queue: str = Field(default="celery", alias="CELERY_QUEUE")
 
 	do_spaces_key: str = ""
 	do_spaces_secret: str = ""

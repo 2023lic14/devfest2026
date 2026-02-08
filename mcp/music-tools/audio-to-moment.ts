@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import draft2020Schema from "ajv/dist/refs/json-schema-2020-12/schema.json" with { type: "json" };
 
 const FILE_DIR = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(FILE_DIR, ".env") });
@@ -142,7 +141,6 @@ async function validateAgainstSchema(blueprint: unknown): Promise<void> {
   const schema = JSON.parse(raw) as Record<string, unknown>;
 
   const ajv = new Ajv2020({ allErrors: true, strict: false });
-  ajv.addMetaSchema(draft2020Schema as any);
   const validate = ajv.compile(schema);
   const ok = validate(blueprint);
   if (ok) return;
@@ -188,6 +186,10 @@ async function transcriptToBlueprint(client: OpenAI, transcript: string): Promis
     "- sections items MUST ONLY contain: name, bars, energy, prompt (no other keys, and do not put lyrics inside sections).",
     "",
     "Use a safe, original style description. Do not mention living artists.",
+    "Infer musical intent from the transcript and include it in metadata:",
+    "- metadata.mood: one short phrase",
+    "- metadata.energy: low|medium|high",
+    "- metadata.vibe: short phrase",
     "",
     "Example shape:",
     '{"id":"...","style":"...","tempo_bpm":110,"key":"C","time_signature":"4/4","sections":[{"name":"verse","bars":8,"energy":0.5,"prompt":"..." }],"lyrics":"...","voice":{"voice_id":"...","model_id":"eleven_multilingual_v2","speaker_boost":true},"metadata":{}}',
@@ -222,7 +224,10 @@ async function submitToApi(args: {
 
   const form = new FormData();
   form.set("file", fileBlob, path.basename(args.audioPath));
-  form.set("blueprint_json", JSON.stringify(args.blueprint));
+  // Also embed output_kind inside blueprint metadata for easier debugging via /v1/status.
+  const blueprint = { ...args.blueprint };
+  blueprint.metadata = { ...(blueprint.metadata ?? {}), output_kind: args.outputKind };
+  form.set("blueprint_json", JSON.stringify(blueprint));
   form.set("output_kind", args.outputKind);
 
   let createResp: Response;
@@ -243,9 +248,10 @@ async function submitToApi(args: {
   return created.job_id;
 }
 
-async function pollStatus(apiBaseUrl: string, jobId: string, timeoutMs = 10 * 60_000) {
+async function pollStatus(apiBaseUrl: string, jobId: string, timeoutMs: number) {
   const base = apiBaseUrl.replace(/\/+$/, "");
   const start = Date.now();
+  let lastStatus = "";
   while (Date.now() - start < timeoutMs) {
     let resp: Response;
     try {
@@ -259,6 +265,11 @@ async function pollStatus(apiBaseUrl: string, jobId: string, timeoutMs = 10 * 60
     }
     const json = (await resp.json()) as any;
     const status = String(json.status ?? "");
+    if (status && status !== lastStatus) {
+      lastStatus = status;
+      // eslint-disable-next-line no-console
+      console.log(`status=${status}`);
+    }
     if (status === "COMPLETED") {
       // eslint-disable-next-line no-console
       console.log(JSON.stringify(json, null, 2));
@@ -294,7 +305,8 @@ async function main() {
   await validateAgainstSchema(blueprint);
 
   const jobId = await submitToApi({ apiBaseUrl, audioPath, blueprint, outputKind });
-  await pollStatus(apiBaseUrl, jobId);
+  const timeoutMs = outputKind.trim().toLowerCase() === "song" ? 20 * 60_000 : 10 * 60_000;
+  await pollStatus(apiBaseUrl, jobId, timeoutMs);
 }
 
 void main().catch((err) => {

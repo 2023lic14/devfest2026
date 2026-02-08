@@ -33,6 +33,8 @@ Create or update api/.env:
 - MCP_BASE_URL
 - MCP_AUTH_TOKEN (if your MCP server requires auth)
 - ELEVENLABS_DEFAULT_VOICE_ID
+- MCP_OUTPUT_KIND (optional: preview|song, default preview)
+- CELERY_QUEUE (recommended when using a shared broker)
 
 Example:
 
@@ -64,20 +66,31 @@ uvicorn src.main:app --reload
 Run the Celery worker:
 
 ```
-celery -A src.services.queue.celery_app worker -l info
+CELERY_QUEUE=claireli
+celery -A src.services.queue.celery_app worker -l info -Q $CELERY_QUEUE
 ```
 
 To avoid Windows multiprocessing lock, run with:
 
-'''
-celery -A src.services.queue.celery_app worker -l info -P solo
-'''
+```
+CELERY_QUEUE=claireli
+celery -A src.services.queue.celery_app worker -l info -P solo -Q $CELERY_QUEUE
+```
 
 Run the MCP server:
 
 ```
 cd mcp/music-tools
-npm run dev:http
+npm run build
+npm run start:http
+```
+
+## Record Mic Audio -> Song (Local)
+
+Once API + worker + MCP server are running, record a clip and run the full pipeline:
+
+```
+python audio/record_to_song.py --api http://127.0.0.1:8001 --kind song
 ```
 
 ## Notes
