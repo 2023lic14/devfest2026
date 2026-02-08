@@ -317,6 +317,11 @@ a {
   animation-duration: 1.4s;
 }
 
+.spectrum[data-live="true"] .spectrum-bar {
+  /* JS-driven heights when analyzing actual audio playback */
+  animation: none;
+}
+
 .spectrum-bar:nth-child(odd) {
   animation-delay: 0.2s;
 }
