@@ -33,3 +33,12 @@ def clean_input_audio(input_path: str, out_path: str = "clean_input.wav"):
     # 5) Export
     audio.export(out_path, format="wav")
     return out_path
+
+
+def clean_output_audio(input_path: str, out_path: str = "final_output.wav"):
+    audio = AudioSegment.from_file(input_path)
+    audio = audio.normalize()
+    audio = audio.apply_gain(-1)
+    audio.export(out_path)
+    return out_path
+
