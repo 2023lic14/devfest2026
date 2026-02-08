@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from celery import Celery
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import settings
 from src.models.schemas import Job, JobStatus, load_blueprint_schema
@@ -49,7 +50,9 @@ def _update_job_metadata(job_id: str, **metadata_updates: Any) -> None:
 		blueprint = job.blueprint_json
 		metadata = blueprint.setdefault("metadata", {})
 		metadata.update(metadata_updates)
-		job.blueprint_json = blueprint
+		job.blueprint_json = dict(blueprint)
+		session.add(job)
+		flag_modified(job, "blueprint_json")
 
 
 def _default_blueprint(job_id: str, original_audio_url: str) -> Dict[str, Any]:
@@ -215,6 +218,19 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 				for chunk in response.iter_bytes():
 					audio_file.write(chunk)
 
+		wav_path = os.path.join(temp_dir, "final.wav")
+		try:
+			subprocess.run(
+				["ffmpeg", "-y", "-i", input_path, "-ac", "2", "-ar", "44100", wav_path],
+				check=True,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+			)
+			demucs_input = wav_path
+		except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+			_update_job_metadata(job_id, stems_error=f"ffmpeg failed: {exc}")
+			return payload
+
 		output_dir = os.path.join(temp_dir, "demucs")
 		command = [
 			sys.executable,
@@ -224,7 +240,7 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 			"htdemucs",
 			"--out",
 			output_dir,
-			input_path,
+			demucs_input,
 		]
 		try:
 			subprocess.run(command, check=True)
@@ -232,7 +248,7 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 			_update_job_metadata(job_id, stems_error=str(exc))
 			return payload
 
-		base_name = os.path.splitext(os.path.basename(input_path))[0]
+		base_name = os.path.splitext(os.path.basename(demucs_input))[0]
 		stem_dir = os.path.join(output_dir, "htdemucs", base_name)
 		if not os.path.isdir(stem_dir):
 			_update_job_metadata(job_id, stems_error="Stem output folder not found.")
