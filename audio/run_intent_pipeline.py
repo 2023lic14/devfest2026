@@ -25,7 +25,7 @@ def run(audio_path: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python run_intent_pipeline.py <audio_file>")
+        print("Usage: python audio/run_intent_pipeline.py <audio_file>")
         sys.exit(1)
 
     audio_file = sys.argv[1]
