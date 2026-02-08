@@ -116,6 +116,7 @@ function resolveSchemaPath(): string {
     envPath,
     path.resolve(process.cwd(), "../../docs/blueprint_schema.json"),
     path.resolve(process.cwd(), "docs/blueprint_schema.json"),
+    path.resolve(FILE_DIR, "../docs/blueprint_schema.json"),
     path.resolve(FILE_DIR, "../../../docs/blueprint_schema.json")
   ].filter((value): value is string => Boolean(value));
 

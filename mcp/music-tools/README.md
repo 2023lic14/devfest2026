@@ -24,6 +24,10 @@ Create or update `mcp/music-tools/.env` with required values:
 - `ELEVENLABS_API_KEY`
 - `ELEVENLABS_DEFAULT_VOICE_ID` (recommended)
 
+Note: Deployments that only include the `mcp/music-tools` folder should rely on the bundled schema at
+`mcp/music-tools/docs/blueprint_schema.json`. If you customize the schema location, set
+`BLUEPRINT_SCHEMA_PATH` to an absolute path.
+
 ## Stdio mode (local)
 
 ```bash
