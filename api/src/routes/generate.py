@@ -19,6 +19,7 @@ from src.services.queue import (
 	mix_and_master,
 	render_instrumental,
 	render_vocals,
+	separate_stems,
 )
 from src.services.storage import upload_to_spaces
 
@@ -54,6 +55,7 @@ async def create_moment(file: UploadFile = File(...), db: Session = Depends(get_
 			group(render_vocals.s(), render_instrumental.s()),
 			mix_and_master.s(),
 		),
+		separate_stems.s(),
 	).apply_async()
 
 	return CreateMomentResponse(job_id=job_id)

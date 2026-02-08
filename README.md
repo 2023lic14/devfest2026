@@ -67,6 +67,12 @@ Run the Celery worker:
 celery -A src.services.queue.celery_app worker -l info
 ```
 
+To avoid Windows multiprocessing lock, run with:
+
+'''
+celery -A src.services.queue.celery_app worker -l info -P solo
+'''
+
 Run the MCP server:
 
 ```
