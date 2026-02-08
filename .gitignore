@@ -2,6 +2,8 @@
 .env.*
 !.env.example
 
+aoi/.env*
+
 mcp/music-tools/.env
 mcp/music-tools/.env.*
 
