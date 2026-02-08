@@ -58,6 +58,12 @@ class Settings(BaseSettings):
 
 	temp_dir: str = "/tmp"
 
+	# Server-side OpenAI usage (blueprint generation from uploaded audio when blueprint_json is omitted).
+	openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+	openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
+	openai_transcribe_model: str = Field(default="gpt-4o-transcribe", alias="OPENAI_TRANSCRIBE_MODEL")
+	openai_timeout_seconds: float = Field(default=60.0, alias="OPENAI_TIMEOUT_SECONDS")
+
 
 settings = Settings()
 

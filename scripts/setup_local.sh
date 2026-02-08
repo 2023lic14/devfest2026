@@ -23,4 +23,8 @@ cd "${ROOT_DIR}/mcp/music-tools"
 npm ci
 npm run build
 
+echo "==> Node deps (web)"
+cd "${ROOT_DIR}/web"
+npm install
+
 echo "Done."

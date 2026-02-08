@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import StartupSplash from "./StartupSplash";
+import { buildProxyAudioUrl, createMoment, fetchStatus, getApiBase } from "../lib/api";
+import type { JobStatus, StatusResponse } from "../lib/types";
 
 const scriptLines = [
   "SCENE 01 - OPENING SHOT",
@@ -31,11 +32,13 @@ export default function HomePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [jobIdState, setJobIdState] = useState<string | null>(null);
   const [recordError, setRecordError] = useState<string | null>(null);
-  const [stemStatus, setStemStatus] = useState<"idle" | "loading" | "ready">("idle");
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  const [finalAudioUrl, setFinalAudioUrl] = useState<string | null>(null);
+  const [hasStems, setHasStems] = useState(false);
   const router = useRouter();
   const params = useSearchParams();
   const jobId = jobIdState ?? params.get("job_id");
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  const apiBase = getApiBase();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -58,30 +61,26 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!jobId) {
-      setStemStatus("idle");
+      setJobStatus(null);
+      setFinalAudioUrl(null);
+      setHasStems(false);
       return;
     }
     let cancelled = false;
     let timeoutId: number | null = null;
 
     const pollStatus = async () => {
-      setStemStatus((prev) => (prev === "ready" ? prev : "loading"));
       try {
-        const response = await fetch(`${apiBase}/v1/status/${jobId}`);
-        if (!response.ok) {
-          throw new Error(`Status ${response.status}`);
-        }
-        const data = await response.json();
-        const stems = data?.blueprint_json?.metadata?.stems;
-        if (stems && !cancelled) {
-          setStemStatus("ready");
-          router.push(`/editor?job_id=${jobId}`);
-          return;
+        const data = (await fetchStatus(jobId, apiBase)) as StatusResponse;
+        const status = data?.status ?? null;
+        if (!cancelled) {
+          setJobStatus(status);
+          setFinalAudioUrl(typeof data.final_audio_url === "string" ? data.final_audio_url : null);
+          const stems = (data as any)?.blueprint_json?.metadata?.stems;
+          setHasStems(Boolean(stems));
         }
       } catch {
-        if (!cancelled) {
-          setStemStatus("loading");
-        }
+        // keep polling
       }
       if (!cancelled) {
         timeoutId = window.setTimeout(pollStatus, 2500);
@@ -123,20 +122,12 @@ export default function HomePage() {
         }
         setIsUploading(true);
         try {
-          const form = new FormData();
-          form.append("file", blob, "hum.webm");
-          const response = await fetch(`${apiBase}/v1/create-moment`, {
-            method: "POST",
-            body: form,
+          const newJobId = await createMoment({
+            file: blob,
+            filename: "hum.webm",
+            apiBase,
+            outputKind: "song",
           });
-          if (!response.ok) {
-            throw new Error(`Upload failed (${response.status})`);
-          }
-          const data = await response.json();
-          const newJobId = data?.job_id as string | undefined;
-          if (!newJobId) {
-            throw new Error("Missing job id from API.");
-          }
           setJobIdState(newJobId);
           router.push(`/?job_id=${newJobId}`);
         } catch (error) {
@@ -193,10 +184,29 @@ export default function HomePage() {
         {recordError && <div className="record-status">{recordError}</div>}
         {jobId && (
           <div className="record-status">
-            <span>Stems:</span>
             <span>
-              {stemStatus === "ready" ? "Ready - opening editor" : "Checking..."}
+              Job: {jobStatus ?? "Checking..."}
             </span>
+          </div>
+        )}
+        {jobId && finalAudioUrl && (
+          <div className="panel" style={{ maxWidth: 720 }}>
+            <h2>Final Song</h2>
+            <audio controls preload="none" src={buildProxyAudioUrl(finalAudioUrl, apiBase)} />
+            <div className="record-status" style={{ marginTop: 12 }}>
+              <span>Editor:</span>
+              <span>{hasStems ? "Stems ready" : "Waiting for stems (optional)"}</span>
+            </div>
+            {hasStems && (
+              <button
+                className="record-button"
+                type="button"
+                onClick={() => router.push(`/editor?job_id=${jobId}`)}
+                style={{ marginTop: 12 }}
+              >
+                Open multitrack editor
+              </button>
+            )}
           </div>
         )}
       </section>

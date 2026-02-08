@@ -35,6 +35,7 @@ Create or update api/.env:
 - ELEVENLABS_DEFAULT_VOICE_ID
 - MCP_OUTPUT_KIND (optional: preview|song, default preview)
 - CELERY_QUEUE (recommended when using a shared broker)
+- OPENAI_API_KEY (required to generate blueprint from uploaded audio)
 
 Example:
 
@@ -83,6 +84,14 @@ Run the MCP server:
 cd mcp/music-tools
 npm run build
 npm run start:http
+```
+
+Run the web frontend:
+
+```
+cd web
+npm install
+NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001 npm run dev
 ```
 
 ## Record Mic Audio -> Song (Local)

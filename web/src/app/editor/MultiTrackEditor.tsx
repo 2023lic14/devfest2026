@@ -48,7 +48,7 @@ const applyMute = (ws: WaveSurfer, muted: boolean) => {
   }
 };
 
-const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001";
 const buildProxyUrl = (rawUrl: string) =>
   `${apiBase}/v1/proxy-audio?url=${encodeURIComponent(rawUrl)}`;
 

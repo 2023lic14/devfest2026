@@ -21,6 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from src.config import settings
 from src.models.schemas import Job, JobStatus, load_blueprint_schema
+from src.services.ai_blueprint import generate_blueprint_from_transcript, transcribe_audio_from_url
 from src.services.blueprint import MCPDirector
 from src.services.db import session_scope
 from src.services.storage import upload_to_spaces
@@ -104,7 +105,7 @@ def _default_blueprint(job_id: str, original_audio_url: str) -> Dict[str, Any]:
 
 @celery_app.task(name="generate_blueprint")
 def generate_blueprint(job_id: str) -> Dict[str, Any]:
-	"""Build a placeholder blueprint and validate it with MCP."""
+	"""Generate (or reuse) a blueprint and validate it with MCP."""
 	_update_job(job_id, status=JobStatus.analyzing)
 
 	with session_scope() as session:
@@ -112,7 +113,13 @@ def generate_blueprint(job_id: str) -> Dict[str, Any]:
 		if not job:
 			return {"job_id": job_id, "blueprint": {}}
 
-		blueprint = job.blueprint_json or _default_blueprint(job_id, job.original_audio_url)
+		if job.blueprint_json:
+			blueprint = job.blueprint_json
+		else:
+			# Server-side "record -> upload -> blueprint" path for the frontend.
+			transcript = transcribe_audio_from_url(job.original_audio_url)
+			blueprint = generate_blueprint_from_transcript(transcript, job_id=job_id)
+
 		director = MCPDirector()
 		validation = director.validate_blueprint(blueprint)
 		if isinstance(validation, dict):
