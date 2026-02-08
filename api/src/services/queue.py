@@ -9,6 +9,7 @@ This module defines the chainable tasks used by the API to process a
 from typing import Any, Dict
 import os
 import subprocess
+import sys
 import tempfile
 from urllib.parse import urlsplit
 
@@ -216,7 +217,7 @@ def separate_stems(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 		output_dir = os.path.join(temp_dir, "demucs")
 		command = [
-			"python",
+			sys.executable,
 			"-m",
 			"demucs",
 			"-n",
